@@ -1,6 +1,6 @@
 import type { AppContext, AppModule } from '@/app/app-context';
 import type { SearchResult } from '@/components/SearchModal';
-import type { NewsItem, MapLayers } from '@/types';
+import type { Follow, NewsItem, MapLayers, Workspace } from '@/types';
 import type { MapView } from '@/components';
 import type { Command } from '@/config/commands';
 import { SearchModal } from '@/components';
@@ -22,12 +22,21 @@ import { STARTUP_ECOSYSTEMS } from '@/config/startup-ecosystems';
 import { TECH_HQS, ACCELERATORS } from '@/config/tech-geo';
 import { STOCK_EXCHANGES, FINANCIAL_CENTERS, CENTRAL_BANKS, COMMODITY_HUBS } from '@/config/finance-geo';
 import { trackSearchResultSelected, trackCountrySelected } from '@/services/analytics';
+import { saveAction } from '@/services/action-store';
+import { commitAutomationEvent, evaluateBriefAutomationRules } from '@/services/automation-engine';
+import { saveAskRun } from '@/services/ask-store';
+import { listAutomationRules } from '@/services/automation-store';
+import { buildWorkspaceAskRun } from '@/services/companion-ask';
+import { buildWorkspaceBriefInputSignature, buildWorkspaceBriefRun, selectWorkspaceBriefItems } from '@/services/companion-briefing';
 import { t } from '@/services/i18n';
+import { listNotes, saveNote } from '@/services/note-store';
+import { listThreads } from '@/services/thread-store';
 import { saveToStorage, setTheme } from '@/utils';
 import { CountryIntelManager } from '@/app/country-intel';
 
 export interface SearchManagerCallbacks {
   openCountryBriefByCode: (code: string, country: string) => void;
+  activateWorkspace: (workspaceId: string) => void;
 }
 
 export class SearchManager implements AppModule {
@@ -43,6 +52,7 @@ export class SearchManager implements AppModule {
 
   init(): void {
     this.setupSearchModal();
+    this.updateSearchIndex();
   }
 
   destroy(): void {
@@ -205,7 +215,7 @@ export class SearchManager implements AppModule {
 
     this.ctx.searchModal.setActivePanels(Object.keys(this.ctx.panels));
     this.ctx.searchModal.setOnSelect((result) => this.handleSearchResult(result));
-    this.ctx.searchModal.setOnCommand((cmd) => this.handleCommand(cmd));
+    this.ctx.searchModal.setOnCommand((cmd, query) => this.handleCommand(cmd, query));
 
     this.boundKeydownHandler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -381,10 +391,187 @@ export class SearchManager implements AppModule {
         this.callbacks.openCountryBriefByCode(code, name);
         break;
       }
+      case 'workspace': {
+        const workspace = result.data as Workspace;
+        if (workspace.id === this.ctx.sessionStore.getSnapshot().activeWorkspaceId) {
+          this.scrollToPanel('monitors');
+          break;
+        }
+        this.callbacks.activateWorkspace(workspace.id);
+        break;
+      }
+      case 'follow': {
+        const follow = result.data as Follow;
+        if (follow.kind === 'ticker') {
+          this.scrollToPanel('markets');
+        } else {
+          this.scrollToPanel('monitors');
+        }
+        break;
+      }
     }
   }
 
-  private handleCommand(cmd: Command): void {
+  private buildCompanionCommandPayload(query: string, patterns: RegExp[]): string {
+    const trimmed = query.trim();
+    for (const pattern of patterns) {
+      const next = trimmed.replace(pattern, '').trim();
+      if (next !== trimmed) return next;
+    }
+    return trimmed;
+  }
+
+  private createManualFollowFromQuery(query: string): void {
+    const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+      this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+    );
+    if (!workspace) return;
+
+    const normalized = query.trim();
+    if (!normalized) return;
+
+    const timestamp = Date.now();
+    const symbolCandidate = normalized.toUpperCase();
+    const isTicker = /^[A-Z0-9.\-]{1,8}$/.test(symbolCandidate);
+    this.ctx.workspaceStore.updateWorkspace(workspace.id, {
+      follows: [
+        ...workspace.follows,
+        {
+          id: `follow-command:${timestamp}`,
+          kind: isTicker ? 'ticker' : 'custom_query',
+          label: isTicker ? symbolCandidate : normalized,
+          query: normalized,
+          source: 'manual',
+          symbol: isTicker ? symbolCandidate : undefined,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
+    });
+    this.updateSearchIndex();
+    this.scrollToPanel('companion-home');
+  }
+
+  private captureCommandNote(query: string): void {
+    const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+      this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+    );
+    if (!workspace) return;
+
+    const body = query.trim();
+    if (!body) return;
+
+    const title = body.length > 48 ? `${body.slice(0, 45)}...` : body;
+    saveNote({
+      workspaceId: workspace.id,
+      title,
+      body,
+      tags: ['captured'],
+      linkedItemIds: [],
+      linkedFollowIds: [],
+    });
+    this.scrollToPanel('companion-home');
+  }
+
+  private askWorkspaceFromQuery(query: string): void {
+    const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+      this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+    );
+    if (!workspace) return;
+
+    const question = query.trim();
+    if (!question) return;
+
+    void buildWorkspaceAskRun({
+      workspace,
+      question,
+      items: this.ctx.inboxStore.listItems(workspace.id),
+      briefRuns: this.ctx.briefingStore.listRuns(workspace.id),
+      notes: listNotes(workspace.id),
+      threads: listThreads(workspace.id),
+    }).then((run) => {
+      saveAskRun({
+        workspaceId: run.workspaceId,
+        intent: run.intent,
+        question: run.question,
+        answer: run.answer,
+        citedItemIds: run.citedItemIds,
+        citedBriefRunIds: run.citedBriefRunIds,
+        citedNoteIds: run.citedNoteIds,
+        citedFollowIds: run.citedFollowIds,
+        citedThreadIds: run.citedThreadIds,
+      });
+      this.scrollToPanel('companion-ask');
+    }).catch((error) => {
+      console.warn('[SearchManager] Failed to generate workspace ask run:', error);
+    });
+  }
+
+  private generateWorkspaceBriefFromCommand(query: string): void {
+    const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+      this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+    );
+    if (!workspace) return;
+
+    const recipeKind = /\b(change|changed|delta|since|new)\b/i.test(query)
+      ? 'workspace_delta'
+      : 'workspace_morning';
+    const recipe = this.ctx.briefingStore.listRecipes(workspace.id)
+      .find((entry) => entry.kind === recipeKind);
+    if (!recipe) return;
+
+    const session = this.ctx.sessionStore.getSnapshot();
+    const scopedItems = this.ctx.inboxStore.listItems(workspace.id);
+    const candidateItems = selectWorkspaceBriefItems(recipe, scopedItems, session.previousVisitedAt);
+    const inputSignature = buildWorkspaceBriefInputSignature(recipe, candidateItems, session.previousVisitedAt);
+    const reusableRun = this.ctx.briefingStore.findReusableRun(recipe.id, inputSignature);
+    if (reusableRun) {
+      this.scrollToPanel('companion-home');
+      return;
+    }
+
+    void buildWorkspaceBriefRun({
+      workspace,
+      recipe,
+      items: scopedItems,
+      threads: listThreads(workspace.id),
+      previousVisitedAt: session.previousVisitedAt,
+    }).then((run) => {
+      this.ctx.briefingStore.saveRun(run);
+      const events = evaluateBriefAutomationRules(
+        workspace,
+        listAutomationRules(workspace.id),
+        run,
+      );
+      for (const event of events.slice(0, 3)) {
+        const committed = commitAutomationEvent(event);
+        if (committed.action === 'create_action') {
+          saveAction({
+            workspaceId: workspace.id,
+            title: `Automation: ${committed.subtitle}`,
+            status: 'open',
+            relatedItemIds: [],
+            relatedFollowIds: [],
+            dueAt: Date.now() + 24 * 60 * 60 * 1000,
+          });
+          continue;
+        }
+        this.ctx.inboxStore.addSystemItem({
+          id: committed.dedupeKey,
+          workspaceId: workspace.id,
+          title: committed.title,
+          subtitle: committed.subtitle,
+          score: committed.score,
+          metadata: committed.metadata,
+        });
+      }
+      this.scrollToPanel('companion-home');
+    }).catch((error) => {
+      console.warn('[SearchManager] Failed to generate workspace brief:', error);
+    });
+  }
+
+  private handleCommand(cmd: Command, rawQuery = ''): void {
     const colonIdx = cmd.id.indexOf(':');
     if (colonIdx === -1) return;
     const category = cmd.id.slice(0, colonIdx);
@@ -490,6 +677,31 @@ export class SearchManager implements AppModule {
         }
         break;
       }
+
+      case 'companion': {
+        if (action === 'follow') {
+          const payload = this.buildCompanionCommandPayload(rawQuery, [
+            /^(follow|track|watch|add follow)\s+/i,
+          ]);
+          this.createManualFollowFromQuery(payload);
+        } else if (action === 'ask') {
+          const payload = this.buildCompanionCommandPayload(rawQuery, [
+            /^(ask|explain|compare|why does this matter|why|question)\s+/i,
+          ]);
+          this.askWorkspaceFromQuery(payload);
+        } else if (action === 'note') {
+          const payload = this.buildCompanionCommandPayload(rawQuery, [
+            /^(note|capture note|remember|memo)\s+/i,
+          ]);
+          this.captureCommandNote(payload);
+        } else if (action === 'brief') {
+          const payload = this.buildCompanionCommandPayload(rawQuery, [
+            /^(brief me|summarize|summary|what changed|workspace brief)\s*/i,
+          ]);
+          this.generateWorkspaceBriefFromCommand(payload || rawQuery);
+        }
+        break;
+      }
     }
   }
 
@@ -528,6 +740,8 @@ export class SearchManager implements AppModule {
 
     this.ctx.searchModal.setActivePanels(Object.keys(this.ctx.panels));
     this.ctx.searchModal.registerSource('country', this.buildCountrySearchItems());
+    this.ctx.searchModal.registerSource('workspace', this.buildWorkspaceSearchItems());
+    this.ctx.searchModal.registerSource('follow', this.buildFollowSearchItems());
 
     const newsItems = this.ctx.allNews.slice(0, 500).map(n => ({
       id: n.link,
@@ -570,5 +784,33 @@ export class SearchManager implements AppModule {
         data: { code, name },
       };
     });
+  }
+
+  private buildWorkspaceSearchItems(): { id: string; title: string; subtitle: string; data: Workspace }[] {
+    const activeWorkspaceId = this.ctx.sessionStore.getSnapshot().activeWorkspaceId;
+    return this.ctx.workspaceStore.listWorkspaces().map((workspace) => {
+      const summary = this.ctx.inboxStore.getWorkspaceSummary(workspace.id);
+      return {
+        id: workspace.id,
+        title: workspace.name,
+        subtitle: `${workspace.id === activeWorkspaceId ? 'Active' : 'Saved'} • ${workspace.follows.length} follows • ${summary.total} inbox items`,
+        data: workspace,
+      };
+    });
+  }
+
+  private buildFollowSearchItems(): { id: string; title: string; subtitle: string; data: Follow }[] {
+    const workspace = this.ctx.workspaceStore.getActiveWorkspace(this.ctx.sessionStore.getSnapshot().activeWorkspaceId);
+    if (!workspace) return [];
+    return workspace.follows.map((follow) => ({
+      id: follow.id,
+      title: follow.label,
+      subtitle: follow.kind === 'ticker'
+        ? `Tracked ticker • ${follow.query}`
+        : follow.kind === 'keyword_set'
+          ? `Tracked keywords • ${follow.query}`
+          : `Tracked follow • ${follow.query}`,
+      data: follow,
+    }));
   }
 }

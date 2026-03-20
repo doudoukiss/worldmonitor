@@ -53,7 +53,14 @@ function resolveCategoryLabel(cmd: Command): string {
   return key ? t(key, { defaultValue: cmd.category }) : cmd.category;
 }
 
-export type SearchResultType = 'country' | 'news' | 'hotspot' | 'market' | 'prediction' | 'conflict' | 'base' | 'pipeline' | 'cable' | 'datacenter' | 'earthquake' | 'outage' | 'nuclear' | 'irradiator' | 'techcompany' | 'ailab' | 'startup' | 'techevent' | 'techhq' | 'accelerator' | 'exchange' | 'financialcenter' | 'centralbank' | 'commodityhub';
+function resolveSearchTypeLabel(type: SearchResultType): string {
+  const key = `modals.search.types.${type}`;
+  const translated = t(key);
+  if (translated && translated !== key) return translated;
+  return type.replace(/[_-]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+export type SearchResultType = 'country' | 'news' | 'hotspot' | 'market' | 'prediction' | 'conflict' | 'base' | 'pipeline' | 'cable' | 'datacenter' | 'earthquake' | 'outage' | 'nuclear' | 'irradiator' | 'techcompany' | 'ailab' | 'startup' | 'techevent' | 'techhq' | 'accelerator' | 'exchange' | 'financialcenter' | 'centralbank' | 'commodityhub' | 'workspace' | 'follow';
 
 export interface SearchResult {
   type: SearchResultType;
@@ -91,7 +98,7 @@ export class SearchModal {
   private selectedIndex = 0;
   private recentSearches: string[] = [];
   private onSelect?: (result: SearchResult) => void;
-  private onCommand?: (command: Command) => void;
+  private onCommand?: (command: Command, query: string) => void;
   private placeholder: string;
   private activePanelIds: Set<string> = new Set();
   private isMobile: boolean;
@@ -118,7 +125,7 @@ export class SearchModal {
     this.onSelect = callback;
   }
 
-  public setOnCommand(callback: (command: Command) => void): void {
+  public setOnCommand(callback: (command: Command, query: string) => void): void {
     this.onCommand = callback;
   }
 
@@ -309,7 +316,7 @@ export class SearchModal {
 
     const priority: SearchResultType[] = [
       'news', 'prediction', 'market', 'earthquake', 'outage',
-      'conflict', 'hotspot', 'country',
+      'workspace', 'follow', 'conflict', 'hotspot', 'country',
       'base', 'pipeline', 'cable', 'datacenter', 'nuclear', 'irradiator',
       'techcompany', 'ailab', 'startup', 'techevent', 'techhq', 'accelerator'
     ];
@@ -498,7 +505,7 @@ export class SearchModal {
         const id = (el as HTMLElement).dataset.command;
         const command = getAllCommands().find(c => c.id === id);
         if (command) {
-          this.onCommand?.(command);
+          this.onCommand?.(command, this.input?.value.trim() || '');
           this.close();
         }
       });
@@ -547,6 +554,8 @@ export class SearchModal {
       financialcenter: '\u{1F4B0}',
       centralbank: '\u{1F3E6}',
       commodityhub: '\u{1F4E6}',
+      workspace: '\u{1F4C1}',
+      follow: '\u{1F4CC}',
     };
 
     let html = '';
@@ -578,7 +587,7 @@ export class SearchModal {
             <div class="search-result-title">${this.highlightMatch(result.title)}</div>
             ${result.subtitle ? `<div class="search-result-subtitle">${escapeHtml(result.subtitle)}</div>` : ''}
           </div>
-          <span class="search-result-type">${escapeHtml(t(`modals.search.types.${result.type}`) || result.type)}</span>
+          <span class="search-result-type">${escapeHtml(resolveSearchTypeLabel(result.type))}</span>
         </div>`;
       globalIndex++;
     }
@@ -691,7 +700,7 @@ export class SearchModal {
       const cmd = this.commandResults[index]?.command;
       if (cmd) {
         this.close();
-        this.onCommand?.(cmd);
+        this.onCommand?.(cmd, this.input?.value.trim() || '');
         return;
       }
     }

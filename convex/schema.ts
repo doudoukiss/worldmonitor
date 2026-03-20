@@ -27,4 +27,12 @@ export default defineSchema({
     name: v.string(),
     value: v.number(),
   }).index("by_name", ["name"]),
+  companionSyncSnapshots: defineTable({
+    channel: v.string(),
+    payload: v.string(),
+    fingerprint: v.string(),
+    exportedAt: v.number(),
+    updatedAt: v.number(),
+    updatedByInstallationId: v.string(),
+  }).index("by_channel", ["channel"]),
 });

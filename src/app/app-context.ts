@@ -5,6 +5,10 @@ import type { SanctionsPressureResult } from '@/services/sanctions-pressure';
 import type { RadiationWatchResult } from '@/services/radiation';
 import type { SecurityAdvisory } from '@/services/security-advisories';
 import type { Earthquake } from '@/services/earthquakes';
+import type { SessionStore } from '@/app/session-store';
+import type { WorkspaceStore } from '@/app/workspace-store';
+import type { InboxStore } from '@/app/inbox-store';
+import type { BriefingStore } from '@/app/briefing-store';
 
 export type { CountryBriefSignals } from '@/types';
 
@@ -29,6 +33,10 @@ export interface AppContext {
   readonly isMobile: boolean;
   readonly isDesktopApp: boolean;
   readonly container: HTMLElement;
+  sessionStore: SessionStore;
+  workspaceStore: WorkspaceStore;
+  inboxStore: InboxStore;
+  briefingStore: BriefingStore;
 
   panels: Record<string, import('@/components').Panel>;
   newsPanels: Record<string, import('@/components').NewsPanel>;

@@ -52,6 +52,10 @@ const FULL_PANELS: Record<string, PanelConfig> = {
   heatmap: { name: 'Sector Heatmap', enabled: true, priority: 2 },
   ai: { name: 'AI/ML', enabled: true, priority: 2 },
   layoffs: { name: 'Layoffs Tracker', enabled: true, priority: 2 },
+  'companion-home': { name: 'Companion Home', enabled: true, priority: 2 },
+  'companion-ask': { name: 'Companion Ask', enabled: true, priority: 2 },
+  'companion-threads': { name: 'Companion Threads', enabled: true, priority: 2 },
+  'companion-inbox': { name: 'Companion Inbox', enabled: true, priority: 2 },
   monitors: { name: 'My Monitors', enabled: true, priority: 2 },
   'satellite-fires': { name: 'Fires', enabled: true, priority: 2 },
   'macro-signals': { name: 'Market Regime', enabled: true, priority: 2 },
@@ -238,6 +242,10 @@ const TECH_PANELS: Record<string, PanelConfig> = {
   stablecoins: { name: 'Stablecoins', enabled: true, priority: 2 },
   'airline-intel': { name: 'Airline Intelligence', enabled: true, priority: 2 },
   'world-clock': { name: 'World Clock', enabled: true, priority: 2 },
+  'companion-home': { name: 'Companion Home', enabled: true, priority: 2 },
+  'companion-ask': { name: 'Companion Ask', enabled: true, priority: 2 },
+  'companion-threads': { name: 'Companion Threads', enabled: true, priority: 2 },
+  'companion-inbox': { name: 'Companion Inbox', enabled: true, priority: 2 },
   monitors: { name: 'My Monitors', enabled: true, priority: 2 },
 };
 
@@ -410,6 +418,10 @@ const FINANCE_PANELS: Record<string, PanelConfig> = {
   polymarket: { name: 'Predictions', enabled: true, priority: 2 },
   'airline-intel': { name: 'Airline Intelligence', enabled: true, priority: 2 },
   'world-clock': { name: 'World Clock', enabled: true, priority: 2 },
+  'companion-home': { name: 'Companion Home', enabled: true, priority: 2 },
+  'companion-ask': { name: 'Companion Ask', enabled: true, priority: 2 },
+  'companion-threads': { name: 'Companion Threads', enabled: true, priority: 2 },
+  'companion-inbox': { name: 'Companion Inbox', enabled: true, priority: 2 },
   monitors: { name: 'My Monitors', enabled: true, priority: 2 },
 };
 
@@ -540,6 +552,10 @@ const FINANCE_MOBILE_MAP_LAYERS: MapLayers = {
 // ============================================
 const HAPPY_PANELS: Record<string, PanelConfig> = {
   map: { name: 'World Map', enabled: true, priority: 1 },
+  'companion-home': { name: 'Companion Home', enabled: true, priority: 1 },
+  'companion-ask': { name: 'Companion Ask', enabled: true, priority: 1 },
+  'companion-threads': { name: 'Companion Threads', enabled: true, priority: 1 },
+  'companion-inbox': { name: 'Companion Inbox', enabled: true, priority: 1 },
   'positive-feed': { name: 'Good News Feed', enabled: true, priority: 1 },
   progress: { name: 'Human Progress', enabled: true, priority: 1 },
   counters: { name: 'Live Counters', enabled: true, priority: 1 },
@@ -702,6 +718,10 @@ const COMMODITY_PANELS: Record<string, PanelConfig> = {
   'airline-intel': { name: 'Airline Intelligence', enabled: true, priority: 2 },
   polymarket: { name: 'Commodity Predictions', enabled: true, priority: 2 },
   'world-clock': { name: 'World Clock', enabled: true, priority: 2 },
+  'companion-home': { name: 'Companion Home', enabled: true, priority: 2 },
+  'companion-ask': { name: 'Companion Ask', enabled: true, priority: 2 },
+  'companion-threads': { name: 'Companion Threads', enabled: true, priority: 2 },
+  'companion-inbox': { name: 'Companion Inbox', enabled: true, priority: 2 },
   monitors: { name: 'My Monitors', enabled: true, priority: 2 },
 };
 
@@ -955,7 +975,7 @@ export const PANEL_CATEGORY_MAP: Record<string, { labelKey: string; panelKeys: s
   // All variants — essential panels
   core: {
     labelKey: 'header.panelCatCore',
-    panelKeys: ['map', 'live-news', 'live-webcams', 'windy-webcams', 'insights', 'strategic-posture'],
+    panelKeys: ['map', 'companion-home', 'companion-ask', 'companion-threads', 'companion-inbox', 'live-news', 'live-webcams', 'windy-webcams', 'insights', 'strategic-posture'],
   },
 
   // Full (geopolitical) variant
@@ -981,7 +1001,7 @@ export const PANEL_CATEGORY_MAP: Record<string, { labelKey: string; panelKeys: s
   },
   dataTracking: {
     labelKey: 'header.panelCatDataTracking',
-    panelKeys: ['monitors', 'satellite-fires', 'ucdp-events', 'displacement', 'climate', 'population-exposure', 'security-advisories', 'radiation-watch', 'oref-sirens', 'world-clock', 'tech-readiness'],
+    panelKeys: ['companion-home', 'companion-ask', 'companion-threads', 'companion-inbox', 'monitors', 'satellite-fires', 'ucdp-events', 'displacement', 'climate', 'population-exposure', 'security-advisories', 'radiation-watch', 'oref-sirens', 'world-clock', 'tech-readiness'],
   },
 
   // Tech variant
@@ -999,7 +1019,7 @@ export const PANEL_CATEGORY_MAP: Record<string, { labelKey: string; panelKeys: s
   },
   techMarkets: {
     labelKey: 'header.panelCatMarkets',
-    panelKeys: ['markets', 'finance', 'crypto', 'economic', 'sanctions-pressure', 'polymarket', 'macro-signals', 'etf-flows', 'stablecoins', 'layoffs', 'monitors', 'world-clock'],
+    panelKeys: ['markets', 'finance', 'crypto', 'economic', 'sanctions-pressure', 'polymarket', 'macro-signals', 'etf-flows', 'stablecoins', 'layoffs', 'companion-home', 'companion-ask', 'companion-threads', 'companion-inbox', 'monitors', 'world-clock'],
   },
 
   // Finance variant
@@ -1029,7 +1049,7 @@ export const PANEL_CATEGORY_MAP: Record<string, { labelKey: string; panelKeys: s
   },
   gulfMena: {
     labelKey: 'header.panelCatGulfMena',
-    panelKeys: ['gulf-economies', 'gcc-investments', 'gccNews', 'monitors', 'world-clock'],
+    panelKeys: ['gulf-economies', 'gcc-investments', 'gccNews', 'companion-home', 'companion-ask', 'companion-threads', 'companion-inbox', 'monitors', 'world-clock'],
   },
 
   // Commodity variant
@@ -1043,13 +1063,13 @@ export const PANEL_CATEGORY_MAP: Record<string, { labelKey: string; panelKeys: s
   },
   commodityEcon: {
     labelKey: 'header.panelCatCommodityEcon',
-    panelKeys: ['trade-policy', 'sanctions-pressure', 'economic', 'gulf-economies', 'gcc-investments', 'finance', 'polymarket', 'airline-intel', 'world-clock', 'monitors'],
+    panelKeys: ['trade-policy', 'sanctions-pressure', 'economic', 'gulf-economies', 'gcc-investments', 'finance', 'polymarket', 'airline-intel', 'world-clock', 'companion-home', 'companion-ask', 'companion-threads', 'companion-inbox', 'monitors'],
   },
 
   // Happy variant
   happyNews: {
     labelKey: 'header.panelCatHappyNews',
-    panelKeys: ['positive-feed', 'progress', 'counters', 'spotlight', 'breakthroughs', 'digest'],
+    panelKeys: ['companion-home', 'companion-ask', 'companion-threads', 'companion-inbox', 'positive-feed', 'progress', 'counters', 'spotlight', 'breakthroughs', 'digest'],
   },
   happyPlanet: {
     labelKey: 'header.panelCatHappyPlanet',

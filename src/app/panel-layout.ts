@@ -17,6 +17,10 @@ import {
   OtherTokensPanel,
   PredictionPanel,
   MonitorPanel,
+  CompanionHomePanel,
+  CompanionInboxPanel,
+  CompanionAskPanel,
+  CompanionThreadsPanel,
   EconomicPanel,
   EnergyComplexPanel,
   GdeltIntelPanel,
@@ -65,6 +69,58 @@ import { t } from '@/services/i18n';
 import { getCurrentTheme } from '@/utils';
 import { trackCriticalBannerAction } from '@/services/analytics';
 import { getSecretState } from '@/services/runtime-config';
+import { deleteAction, listActions, saveAction, setActionStatus, subscribeActions } from '@/services/action-store';
+import {
+  deleteAutomationRule,
+  listAutomationRules,
+  resumeAutomationRule,
+  saveAutomationRule,
+  snoozeAutomationRule,
+  subscribeAutomationRules,
+  toggleAutomationRule,
+} from '@/services/automation-store';
+import { listAutomationEvents, subscribeAutomationHistory } from '@/services/automation-history-store';
+import {
+  commitAutomationEvent,
+  evaluateBriefAutomationRules,
+} from '@/services/automation-engine';
+import {
+  buildWorkspaceBriefInputSignature,
+  buildWorkspaceBriefRun,
+  selectWorkspaceBriefItems,
+} from '@/services/companion-briefing';
+import { listAskRuns, saveAskRun, subscribeAskRuns } from '@/services/ask-store';
+import { buildWorkspaceAskRun } from '@/services/companion-ask';
+import {
+  buildCompanionBackupDocument,
+  parseCompanionBackupDocument,
+  restoreCompanionBackupDocument,
+} from '@/services/companion-backup';
+import {
+  buildCompanionSyncComparison,
+  buildCompanionSyncRecommendation,
+  buildCompanionSyncReadiness,
+  buildSuggestedCompanionSyncChannel,
+  buildCompanionFingerprint,
+  getCompanionSyncConvexUrl,
+  isCompanionSyncConvexAvailable,
+  loadCompanionSyncSnapshot,
+  normalizeCompanionSyncChannel,
+  pullManualCompanionSyncPayload,
+  pushManualCompanionSyncPayload,
+  saveCompanionSyncSnapshot,
+  subscribeCompanionSync,
+} from '@/services/companion-sync';
+import {
+  pullConvexCompanionSyncPayload,
+  pushConvexCompanionSyncPayload,
+} from '@/services/companion-sync-convex';
+import { isInboxItemCurrentlySnoozed } from '@/services/inbox-store';
+import { deleteNote, listNotes, saveNote, subscribeNotes } from '@/services/note-store';
+import { loadProfile, saveProfile, subscribeProfile } from '@/services/profile-store';
+import { listSyncJobs, recordSyncJob, subscribeSyncJobs } from '@/services/sync-job-store';
+import { deleteThread, listThreads, saveThread, subscribeThreads } from '@/services/thread-store';
+import { activateWorkspaceRuntime } from '@/services/workspace-runtime';
 import { CustomWidgetPanel } from '@/components/CustomWidgetPanel';
 import { openWidgetChatModal } from '@/components/WidgetChatModal';
 import { isWidgetFeatureEnabled, isProWidgetEnabled, loadWidgets, saveWidget } from '@/services/widget-store';
@@ -77,9 +133,11 @@ import type { McpPanelSpec } from '@/services/mcp-store';
 export interface PanelLayoutCallbacks {
   openCountryStory: (code: string, name: string) => void;
   openCountryBrief: (code: string) => void;
+  activateWorkspace: (workspaceId: string) => void;
   loadAllData: () => Promise<void>;
   updateMonitorResults: () => void;
   loadSecurityAdvisories?: () => Promise<void>;
+  syncCompanionStores?: () => void;
 }
 
 export class PanelLayoutManager implements AppModule {
@@ -541,11 +599,1132 @@ export class PanelLayoutManager implements AppModule {
       ]);
     }
 
+    const getCompanionHomeData = () => {
+      const session = this.ctx.sessionStore.getSnapshot();
+      const activeWorkspace = this.ctx.workspaceStore.getActiveWorkspace(session.activeWorkspaceId);
+      const inboxItems = activeWorkspace ? this.ctx.inboxStore.listItems(activeWorkspace.id) : [];
+      const inboxSummary = activeWorkspace
+        ? this.ctx.inboxStore.getWorkspaceSummary(activeWorkspace.id)
+        : { total: 0, unread: 0, saved: 0, dismissed: 0, snoozed: 0 };
+      const previousVisitedAt = session.previousVisitedAt;
+
+      const profile = loadProfile();
+      const syncStatus = loadCompanionSyncSnapshot();
+      return {
+        profileName: profile.displayName,
+        profileSyncMode: profile.syncMode,
+        activeWorkspace,
+        workspaces: this.ctx.workspaceStore.listWorkspaces(),
+        inboxItems,
+        unreadCount: inboxSummary.unread,
+        savedCount: inboxSummary.saved,
+        newSincePreviousVisit: previousVisitedAt == null
+          ? inboxItems.filter((item) => item.state !== 'dismissed' && !isInboxItemCurrentlySnoozed(item)).length
+          : inboxItems.filter((item) => (
+            item.occurredAt > previousVisitedAt
+              && item.state !== 'dismissed'
+              && !isInboxItemCurrentlySnoozed(item)
+          )).length,
+        askRuns: activeWorkspace ? listAskRuns(activeWorkspace.id) : [],
+        briefs: activeWorkspace
+          ? this.ctx.briefingStore.listRecipes(activeWorkspace.id).map((recipe) => {
+            const latestRun = this.ctx.briefingStore.getLatestRun(recipe.id);
+            const recentRuns = this.ctx.briefingStore.listRunsForRecipe(recipe.id).slice(0, 3);
+            return {
+              id: recipe.id,
+              kind: recipe.kind,
+              title: recipe.title,
+              latestSummary: latestRun?.summary,
+              latestGeneratedAt: latestRun?.generatedAt ?? null,
+              recentRuns: recentRuns.map((run) => ({
+                id: run.id,
+                generatedAt: run.generatedAt,
+                summary: run.summary,
+                sourceCount: run.sourceCount,
+                status: run.status,
+              })),
+            };
+          })
+          : [],
+        actions: activeWorkspace ? listActions(activeWorkspace.id) : [],
+        notes: activeWorkspace ? listNotes(activeWorkspace.id) : [],
+        threads: activeWorkspace ? listThreads(activeWorkspace.id) : [],
+        automationRules: activeWorkspace ? listAutomationRules(activeWorkspace.id) : [],
+        automationHistory: activeWorkspace ? listAutomationEvents(activeWorkspace.id).slice(0, 8) : [],
+        syncJobs: listSyncJobs().slice(0, 8),
+        syncStatus: {
+          provider: syncStatus.provider,
+          providerAvailable: syncStatus.provider !== 'convex' || isCompanionSyncConvexAvailable(),
+          syncChannel: syncStatus.syncChannel,
+          installationId: syncStatus.installationId,
+          suggestedChannel: buildSuggestedCompanionSyncChannel(profile.displayName, syncStatus.installationId),
+          readinessChecks: buildCompanionSyncReadiness(profile.syncMode, syncStatus),
+          comparison: buildCompanionSyncComparison(syncStatus),
+          recommendation: buildCompanionSyncRecommendation(
+            profile.syncMode,
+            syncStatus,
+            buildCompanionSyncComparison(syncStatus),
+          ),
+          lastProbedAt: syncStatus.lastProbedAt,
+          lastExportedAt: syncStatus.lastExportedAt,
+          lastImportedAt: syncStatus.lastImportedAt,
+          lastPushedAt: syncStatus.lastPushedAt,
+          lastPulledAt: syncStatus.lastPulledAt,
+          lastFingerprint: syncStatus.lastFingerprint,
+          remoteExportedAt: syncStatus.remoteExportedAt,
+          remoteUpdatedAt: syncStatus.remoteUpdatedAt,
+          remoteFingerprint: syncStatus.remoteFingerprint,
+          remoteInstallationId: syncStatus.remoteInstallationId,
+          lastConflictAt: syncStatus.lastConflictAt,
+          lastConflictFingerprint: syncStatus.lastConflictFingerprint,
+          lastError: syncStatus.lastError,
+          convexUrlConfigured: getCompanionSyncConvexUrl().length > 0,
+        },
+        availableFeatureIds: session.availableFeatureIds,
+      };
+    };
+
+    const subscribeCompanionState = (listener: () => void): (() => void) => {
+      const unsubs = [
+        this.ctx.sessionStore.subscribe(listener),
+        this.ctx.workspaceStore.subscribe(listener),
+        this.ctx.inboxStore.subscribe(listener),
+        this.ctx.briefingStore.subscribe(listener),
+        subscribeAskRuns(listener),
+        subscribeProfile(listener),
+        subscribeCompanionSync(listener),
+        subscribeNotes(listener),
+        subscribeThreads(listener),
+        subscribeActions(listener),
+        subscribeAutomationRules(listener),
+        subscribeAutomationHistory(listener),
+        subscribeSyncJobs(listener),
+      ];
+      return () => {
+        for (const unsub of unsubs) unsub();
+      };
+    };
+
+    const toggleInboxTag = (itemId: string, tag: string): void => {
+      this.ctx.inboxStore.toggleTag(itemId, tag);
+    };
+
+    const setInboxFeedback = (
+      itemId: string,
+      feedback: 'useful' | 'not_useful' | 'too_noisy',
+    ): void => {
+      this.ctx.inboxStore.setItemFeedback(itemId, feedback);
+    };
+
+    const toggleInboxSnooze = (itemId: string): void => {
+      this.ctx.inboxStore.toggleSnooze(itemId);
+    };
+
+    const createActionFromInboxItem = (itemId: string, title: string): void => {
+      const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+        this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+      );
+      if (!workspace) return;
+      const item = this.ctx.inboxStore.listItems(workspace.id).find((entry) => entry.id === itemId);
+      saveAction({
+        workspaceId: workspace.id,
+        title: `Follow up: ${title}`,
+        status: 'open',
+        relatedItemIds: [itemId],
+        relatedFollowIds: item?.relatedFollowIds ?? [],
+        dueAt: Date.now() + 24 * 60 * 60 * 1000,
+      });
+    };
+
+    const createNoteFromInboxItem = (itemId: string): void => {
+      const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+        this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+      );
+      if (!workspace) return;
+      const item = this.ctx.inboxStore.listItems(workspace.id).find((entry) => entry.id === itemId);
+      if (!item) return;
+      saveNote({
+        workspaceId: workspace.id,
+        title: item.title,
+        body: item.url ? `${item.title}\n\n${item.url}` : item.title,
+        tags: ['captured'],
+        linkedItemIds: [item.id],
+        linkedFollowIds: item.relatedFollowIds,
+      });
+    };
+
+    const createThreadFromInboxItem = (itemId: string): void => {
+      const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+        this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+      );
+      if (!workspace) return;
+      const item = this.ctx.inboxStore.listItems(workspace.id).find((entry) => entry.id === itemId);
+      if (!item) return;
+      saveThread({
+        workspaceId: workspace.id,
+        title: item.title,
+        summary: item.subtitle || `Thread created from ${item.source}.`,
+        linkedItemIds: [item.id],
+        linkedNoteIds: [],
+        linkedActionIds: [],
+        linkedFollowIds: item.relatedFollowIds,
+        linkedBriefRunIds: [],
+        linkedAskRunIds: [],
+      });
+    };
+
+    const handleSavedBriefRun = (run: import('@/types').BriefRun): void => {
+      this.ctx.briefingStore.saveRun(run);
+      const workspace = this.ctx.workspaceStore.getWorkspace(run.workspaceId);
+      if (!workspace) return;
+      const events = evaluateBriefAutomationRules(
+        workspace,
+        listAutomationRules(workspace.id),
+        run,
+      );
+      for (const event of events.slice(0, 3)) {
+        const committed = commitAutomationEvent(event);
+        if (committed.action === 'create_action') {
+          saveAction({
+            workspaceId: workspace.id,
+            title: `Automation: ${committed.subtitle}`,
+            status: 'open',
+            relatedItemIds: [],
+            relatedFollowIds: [],
+            dueAt: Date.now() + 24 * 60 * 60 * 1000,
+          });
+          continue;
+        }
+        this.ctx.inboxStore.addSystemItem({
+          id: committed.dedupeKey,
+          workspaceId: workspace.id,
+          title: committed.title,
+          subtitle: committed.subtitle,
+          score: committed.score,
+          metadata: committed.metadata,
+        });
+      }
+    };
+
+    this.createPanel('companion-home', () => new CompanionHomePanel({
+      getData: getCompanionHomeData,
+      subscribe: subscribeCompanionState,
+      onCreateWorkspace: (name) => {
+        const activeWorkspace = this.ctx.workspaceStore.getActiveWorkspace(
+          this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+        );
+        const workspace = this.ctx.workspaceStore.createWorkspace(name, {
+          template: activeWorkspace?.template ?? 'custom',
+          follows: activeWorkspace?.follows ?? [],
+          description: 'Personal workspace created from the current dashboard layout.',
+          panelSettings: this.ctx.panelSettings,
+          mapLayers: this.ctx.mapLayers,
+        });
+        this.ctx.sessionStore.setActiveWorkspaceId(workspace.id);
+        activateWorkspaceRuntime(workspace);
+      },
+      onActivateWorkspace: (workspaceId) => {
+        this.callbacks.activateWorkspace(workspaceId);
+      },
+      onUpdateWorkspace: ({ id, name, description }) => {
+        this.ctx.workspaceStore.updateWorkspace(id, {
+          name,
+          description,
+        });
+      },
+      onDeleteWorkspace: (workspaceId) => {
+        const workspace = this.ctx.workspaceStore.getWorkspace(workspaceId);
+        if (!workspace || workspace.legacyBacked) return;
+        if (!window.confirm(`Delete workspace "${workspace.name}"?`)) return;
+        const deleted = this.ctx.workspaceStore.deleteWorkspace(workspaceId);
+        if (!deleted) return;
+
+        const fallbackWorkspace = this.ctx.workspaceStore.getActiveWorkspace(null);
+        if (!fallbackWorkspace) return;
+        this.ctx.sessionStore.setActiveWorkspaceId(fallbackWorkspace.id);
+        activateWorkspaceRuntime(fallbackWorkspace);
+      },
+      onSetItemState: (itemId, state) => {
+        this.ctx.inboxStore.setItemState(itemId, state);
+      },
+      onToggleSnoozeItem: toggleInboxSnooze,
+      onToggleItemTag: toggleInboxTag,
+      onSetItemFeedback: setInboxFeedback,
+      onAskWorkspace: (question) => {
+        const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+          this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+        );
+        if (!workspace) return;
+        void buildWorkspaceAskRun({
+          workspace,
+          question,
+          items: this.ctx.inboxStore.listItems(workspace.id),
+          briefRuns: this.ctx.briefingStore.listRuns(workspace.id),
+          notes: listNotes(workspace.id),
+          threads: listThreads(workspace.id),
+        }).then((run) => {
+          saveAskRun({
+            workspaceId: run.workspaceId,
+            intent: run.intent,
+            question: run.question,
+            answer: run.answer,
+            citedItemIds: run.citedItemIds,
+            citedBriefRunIds: run.citedBriefRunIds,
+            citedNoteIds: run.citedNoteIds,
+            citedFollowIds: run.citedFollowIds,
+            citedThreadIds: run.citedThreadIds,
+          });
+        }).catch((error) => {
+          console.warn('[CompanionAsk] Failed to build ask run:', error);
+        });
+      },
+      onGenerateBrief: (recipeId) => {
+        const session = this.ctx.sessionStore.getSnapshot();
+        const workspace = this.ctx.workspaceStore.getActiveWorkspace(session.activeWorkspaceId);
+        const recipe = this.ctx.briefingStore.getRecipe(recipeId);
+        if (!workspace || !recipe) return;
+
+        const scopedItems = this.ctx.inboxStore.listItems(workspace.id);
+        const candidateItems = selectWorkspaceBriefItems(
+          recipe,
+          scopedItems,
+          session.previousVisitedAt,
+        );
+        const inputSignature = buildWorkspaceBriefInputSignature(
+          recipe,
+          candidateItems,
+          session.previousVisitedAt,
+        );
+        const reusableRun = this.ctx.briefingStore.findReusableRun(recipe.id, inputSignature);
+        if (reusableRun) return;
+
+        void buildWorkspaceBriefRun({
+          workspace,
+          recipe,
+          items: scopedItems,
+          threads: listThreads(workspace.id),
+          previousVisitedAt: session.previousVisitedAt,
+        }).then((run) => {
+          handleSavedBriefRun(run);
+        }).catch((error) => {
+          console.warn('[CompanionBriefing] Failed to generate brief run:', error);
+        });
+      },
+      onAddFollow: (label, query) => {
+        const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+          this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+        );
+        if (!workspace) return;
+
+        const timestamp = Date.now();
+        this.ctx.workspaceStore.updateWorkspace(workspace.id, {
+          follows: [
+            ...workspace.follows,
+            {
+              id: `follow-manual:${timestamp}`,
+              kind: /^[A-Z0-9.\-]{1,8}$/.test(query.toUpperCase()) ? 'ticker' : 'custom_query',
+              label,
+              query,
+              source: 'manual',
+              symbol: /^[A-Z0-9.\-]{1,8}$/.test(query.toUpperCase()) ? query.toUpperCase() : undefined,
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            },
+          ],
+        });
+        this.callbacks.syncCompanionStores?.();
+      },
+      onRemoveFollow: (followId) => {
+        const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+          this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+        );
+        if (!workspace) return;
+        this.ctx.workspaceStore.updateWorkspace(workspace.id, {
+          follows: workspace.follows.filter((follow) => follow.id !== followId),
+        });
+        this.callbacks.syncCompanionStores?.();
+      },
+      onSaveNote: ({ id, title, body, linkedFollowIds }) => {
+        const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+          this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+        );
+        if (!workspace) return;
+        const existing = id
+          ? listNotes(workspace.id).find((note) => note.id === id) ?? null
+          : null;
+        saveNote({
+          id,
+          workspaceId: workspace.id,
+          title,
+          body,
+          tags: existing?.tags ?? [],
+          linkedItemIds: existing?.linkedItemIds ?? [],
+          linkedFollowIds,
+        });
+      },
+      onCreateThread: ({ id, title, summary }) => {
+        const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+          this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+        );
+        if (!workspace) return;
+        const existing = id
+          ? listThreads(workspace.id).find((thread) => thread.id === id) ?? null
+          : null;
+        saveThread({
+          id,
+          workspaceId: workspace.id,
+          title,
+          summary,
+          linkedItemIds: existing?.linkedItemIds ?? [],
+          linkedNoteIds: existing?.linkedNoteIds ?? [],
+          linkedActionIds: existing?.linkedActionIds ?? [],
+          linkedFollowIds: existing?.linkedFollowIds ?? [],
+          linkedBriefRunIds: existing?.linkedBriefRunIds ?? [],
+          linkedAskRunIds: existing?.linkedAskRunIds ?? [],
+        });
+      },
+      onDeleteThread: (threadId) => {
+        deleteThread(threadId);
+      },
+      onCreateThreadFromNote: (noteId) => {
+        const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+          this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+        );
+        if (!workspace) return;
+        const note = listNotes(workspace.id).find((entry) => entry.id === noteId);
+        if (!note) return;
+        saveThread({
+          workspaceId: workspace.id,
+          title: note.title,
+          summary: note.body.slice(0, 220),
+          linkedItemIds: note.linkedItemIds,
+          linkedNoteIds: [note.id],
+          linkedActionIds: [],
+          linkedFollowIds: note.linkedFollowIds,
+          linkedBriefRunIds: [],
+          linkedAskRunIds: [],
+        });
+      },
+      onCreateNoteFromItem: createNoteFromInboxItem,
+      onDeleteNote: (noteId) => {
+        deleteNote(noteId);
+      },
+      onSaveAskRunAsNote: (askRunId) => {
+        const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+          this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+        );
+        if (!workspace) return;
+        const run = listAskRuns(workspace.id).find((entry) => entry.id === askRunId);
+        if (!run) return;
+        saveNote({
+          workspaceId: workspace.id,
+          title: run.question,
+          body: run.answer,
+          tags: ['ask'],
+          linkedItemIds: run.citedItemIds,
+          linkedFollowIds: run.citedFollowIds,
+        });
+      },
+      onRenameProfile: (name) => {
+        saveProfile({ displayName: name });
+      },
+      onSetSyncMode: (mode) => {
+        const currentSync = loadCompanionSyncSnapshot();
+        saveProfile({ syncMode: mode });
+        saveCompanionSyncSnapshot({
+          mode,
+          provider: mode === 'sync'
+            ? (currentSync.provider === 'none' ? 'manual' : currentSync.provider)
+            : 'none',
+        });
+      },
+      onSaveAction: ({ id, title, dueAt }) => {
+        const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+          this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+        );
+        if (!workspace) return;
+        const existing = id
+          ? listActions(workspace.id).find((action) => action.id === id) ?? null
+          : null;
+        saveAction({
+          id,
+          workspaceId: workspace.id,
+          title,
+          status: existing?.status ?? 'open',
+          relatedItemIds: existing?.relatedItemIds ?? [],
+          relatedFollowIds: existing?.relatedFollowIds ?? [],
+          dueAt,
+        });
+      },
+      onCreateActionFromItem: (itemId, title) => {
+        createActionFromInboxItem(itemId, title);
+      },
+      onCreateThreadFromItem: (itemId) => {
+        createThreadFromInboxItem(itemId);
+      },
+      onCreateThreadFromAction: (actionId) => {
+        const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+          this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+        );
+        if (!workspace) return;
+        const action = listActions(workspace.id).find((entry) => entry.id === actionId);
+        if (!action) return;
+        saveThread({
+          workspaceId: workspace.id,
+          title: action.title,
+          summary: action.relatedItemIds.length > 0 ? 'Thread created from an action linked to workspace signal context.' : 'Thread created from a standalone action.',
+          linkedItemIds: action.relatedItemIds,
+          linkedNoteIds: [],
+          linkedActionIds: [action.id],
+          linkedFollowIds: action.relatedFollowIds,
+          linkedBriefRunIds: [],
+          linkedAskRunIds: [],
+        });
+      },
+      onDeleteAction: (actionId) => {
+        deleteAction(actionId);
+      },
+      onToggleAction: (actionId, nextStatus) => {
+        setActionStatus(actionId, nextStatus);
+      },
+      onSaveAskRunAsAction: (askRunId) => {
+        const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+          this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+        );
+        if (!workspace) return;
+        const run = listAskRuns(workspace.id).find((entry) => entry.id === askRunId);
+        if (!run) return;
+        saveAction({
+          workspaceId: workspace.id,
+          title: `Review: ${run.question}`,
+          status: 'open',
+          relatedItemIds: run.citedItemIds,
+          relatedFollowIds: run.citedFollowIds,
+          dueAt: Date.now() + 24 * 60 * 60 * 1000,
+        });
+      },
+      onCreateThreadFromAskRun: (askRunId) => {
+        const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+          this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+        );
+        if (!workspace) return;
+        const run = listAskRuns(workspace.id).find((entry) => entry.id === askRunId);
+        if (!run) return;
+        saveThread({
+          workspaceId: workspace.id,
+          title: run.question,
+          summary: run.answer.slice(0, 220),
+          linkedItemIds: run.citedItemIds,
+          linkedNoteIds: run.citedNoteIds,
+          linkedActionIds: [],
+          linkedFollowIds: run.citedFollowIds,
+          linkedBriefRunIds: run.citedBriefRunIds,
+          linkedAskRunIds: [run.id],
+        });
+      },
+      onSaveAutomationRule: ({ id, name, trigger, action, minimumScore }) => {
+        const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+          this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+        );
+        if (!workspace) return;
+        const existing = id
+          ? listAutomationRules(workspace.id).find((rule) => rule.id === id) ?? null
+          : null;
+        saveAutomationRule({
+          id,
+          workspaceId: workspace.id,
+          name,
+          enabled: existing?.enabled ?? true,
+          trigger,
+          action,
+          minimumScore,
+          mutedUntil: existing?.mutedUntil ?? null,
+        });
+      },
+      onDeleteAutomationRule: (ruleId) => {
+        deleteAutomationRule(ruleId);
+      },
+      onToggleAutomationRule: (ruleId, enabled) => {
+        toggleAutomationRule(ruleId, enabled);
+      },
+      onSnoozeAutomationRule: (ruleId) => {
+        snoozeAutomationRule(ruleId);
+      },
+      onResumeAutomationRule: (ruleId) => {
+        resumeAutomationRule(ruleId);
+      },
+      onExportBackup: () => {
+        const backup = buildCompanionBackupDocument(
+          this.ctx.sessionStore.getSnapshot(),
+          this.ctx.briefingStore,
+        );
+        const raw = JSON.stringify(backup, null, 2);
+        const fingerprint = buildCompanionFingerprint(raw);
+        const syncStatus = loadCompanionSyncSnapshot();
+        saveCompanionSyncSnapshot({
+          mode: loadProfile().syncMode,
+          provider: loadProfile().syncMode === 'sync'
+            ? (syncStatus.provider === 'none' ? 'manual' : syncStatus.provider)
+            : 'none',
+          lastExportedAt: Date.now(),
+          lastFingerprint: fingerprint,
+          lastError: null,
+        });
+        const blob = new Blob([raw], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `worldmonitor-companion-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        link.click();
+        URL.revokeObjectURL(url);
+      },
+      onImportBackup: (raw) => {
+        const backup = parseCompanionBackupDocument(raw);
+        if (!backup) {
+          window.alert('Invalid companion backup file.');
+          return;
+        }
+        const syncStatus = loadCompanionSyncSnapshot();
+        saveCompanionSyncSnapshot({
+          mode: backup.profile.syncMode,
+          provider: backup.profile.syncMode === 'sync'
+            ? (syncStatus.provider === 'none' ? 'manual' : syncStatus.provider)
+            : 'none',
+          lastImportedAt: Date.now(),
+          lastFingerprint: buildCompanionFingerprint(raw),
+          lastError: null,
+        });
+        restoreCompanionBackupDocument(backup, {
+          sessionStore: this.ctx.sessionStore,
+          workspaceStore: this.ctx.workspaceStore,
+          inboxStore: this.ctx.inboxStore,
+          briefingStore: this.ctx.briefingStore,
+        });
+        window.location.reload();
+      },
+      onSetSyncProvider: (provider) => {
+        saveCompanionSyncSnapshot({
+          provider,
+          lastError: null,
+        });
+      },
+      onSetSyncChannel: (syncChannel) => {
+        saveCompanionSyncSnapshot({
+          syncChannel: normalizeCompanionSyncChannel(syncChannel),
+          lastError: null,
+        });
+      },
+      onProbeSync: async () => {
+        const syncStatus = loadCompanionSyncSnapshot();
+        if (syncStatus.provider !== 'convex') return;
+        try {
+          const remote = await pullConvexCompanionSyncPayload(syncStatus.syncChannel);
+          if (!remote) {
+            recordSyncJob({
+              provider: 'convex',
+              operation: 'probe',
+              status: 'error',
+              syncChannel: syncStatus.syncChannel,
+              message: 'Convex is reachable, but no remote snapshot exists yet for this sync channel.',
+            });
+            saveCompanionSyncSnapshot({
+              provider: 'convex',
+              lastProbedAt: Date.now(),
+              lastError: 'Convex is reachable, but no remote snapshot exists yet for this sync channel.',
+              remoteFingerprint: null,
+              remoteExportedAt: null,
+              remoteUpdatedAt: null,
+              remoteInstallationId: null,
+            });
+            return;
+          }
+          recordSyncJob({
+            provider: 'convex',
+            operation: 'probe',
+            status: 'success',
+            syncChannel: syncStatus.syncChannel,
+            remoteFingerprint: remote.fingerprint,
+            message: 'Convex remote snapshot is reachable for this sync channel.',
+          });
+          saveCompanionSyncSnapshot({
+            provider: 'convex',
+            lastProbedAt: Date.now(),
+            remoteFingerprint: remote.fingerprint,
+            remoteExportedAt: remote.exportedAt,
+            remoteUpdatedAt: remote.updatedAt,
+            remoteInstallationId: remote.updatedByInstallationId,
+            lastError: null,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Convex remote probe failed.';
+          recordSyncJob({
+            provider: 'convex',
+            operation: 'probe',
+            status: 'error',
+            syncChannel: syncStatus.syncChannel,
+            message,
+          });
+          saveCompanionSyncSnapshot({
+            provider: 'convex',
+            lastProbedAt: Date.now(),
+            lastError: message,
+          });
+        }
+      },
+      onResetSyncDiagnostics: () => {
+        const syncStatus = loadCompanionSyncSnapshot();
+        saveCompanionSyncSnapshot({
+          provider: syncStatus.provider,
+          syncChannel: syncStatus.syncChannel,
+          lastError: null,
+          lastConflictAt: null,
+          lastConflictFingerprint: null,
+          remoteFingerprint: null,
+          remoteExportedAt: null,
+          remoteUpdatedAt: null,
+          remoteInstallationId: null,
+        });
+      },
+      onPushSync: async () => {
+        const backup = buildCompanionBackupDocument(
+          this.ctx.sessionStore.getSnapshot(),
+          this.ctx.briefingStore,
+        );
+        const raw = JSON.stringify(backup, null, 2);
+        const fingerprint = buildCompanionFingerprint(raw);
+        const syncStatus = loadCompanionSyncSnapshot();
+        if (syncStatus.provider === 'convex') {
+          try {
+            const result = await pushConvexCompanionSyncPayload({
+              channel: syncStatus.syncChannel,
+              payload: raw,
+              fingerprint,
+              exportedAt: backup.exportedAt,
+              installationId: syncStatus.installationId,
+            });
+            if (result.status === 'conflict') {
+              recordSyncJob({
+                provider: 'convex',
+                operation: 'push',
+                status: 'conflict',
+                syncChannel: syncStatus.syncChannel,
+                fingerprint,
+                remoteFingerprint: result.fingerprint,
+                message: 'Push blocked because the remote snapshot is newer than the local export.',
+              });
+              saveCompanionSyncSnapshot({
+                provider: 'convex',
+                lastConflictAt: Date.now(),
+                lastConflictFingerprint: result.fingerprint,
+                remoteFingerprint: result.fingerprint,
+                remoteExportedAt: result.exportedAt,
+                remoteUpdatedAt: result.updatedAt,
+                remoteInstallationId: result.updatedByInstallationId,
+                lastError: 'Remote snapshot is newer than the local backup. Pull first or export a fresher local snapshot.',
+              });
+              window.alert('Convex sync conflict detected. Pull the newer remote snapshot before pushing again.');
+              return;
+            }
+            recordSyncJob({
+              provider: 'convex',
+              operation: 'push',
+              status: 'success',
+              syncChannel: syncStatus.syncChannel,
+              fingerprint,
+              remoteFingerprint: result.fingerprint,
+              message: 'Pushed local companion state to Convex.',
+            });
+            saveCompanionSyncSnapshot({
+              provider: 'convex',
+              lastExportedAt: backup.exportedAt,
+              lastPushedAt: Date.now(),
+              lastFingerprint: fingerprint,
+              remoteFingerprint: result.fingerprint,
+              remoteExportedAt: result.exportedAt,
+              remoteUpdatedAt: result.updatedAt,
+              remoteInstallationId: result.updatedByInstallationId,
+              lastConflictAt: null,
+              lastConflictFingerprint: null,
+              lastError: null,
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'Convex sync push failed.';
+            recordSyncJob({
+              provider: 'convex',
+              operation: 'push',
+              status: 'error',
+              syncChannel: syncStatus.syncChannel,
+              fingerprint,
+              message,
+            });
+            saveCompanionSyncSnapshot({
+              provider: 'convex',
+              lastError: message,
+            });
+            window.alert(message);
+          }
+          return;
+        }
+        pushManualCompanionSyncPayload(raw);
+        recordSyncJob({
+          provider: 'manual',
+          operation: 'push',
+          status: 'success',
+          fingerprint,
+          message: 'Stored a manual sync snapshot locally.',
+        });
+        saveCompanionSyncSnapshot({
+          provider: 'manual',
+          lastExportedAt: backup.exportedAt,
+          lastError: null,
+        });
+      },
+      onForcePushSync: async () => {
+        const backup = buildCompanionBackupDocument(
+          this.ctx.sessionStore.getSnapshot(),
+          this.ctx.briefingStore,
+        );
+        const raw = JSON.stringify(backup, null, 2);
+        const fingerprint = buildCompanionFingerprint(raw);
+        const syncStatus = loadCompanionSyncSnapshot();
+        if (syncStatus.provider !== 'convex') return;
+        try {
+          const result = await pushConvexCompanionSyncPayload({
+            channel: syncStatus.syncChannel,
+            payload: raw,
+            fingerprint,
+            exportedAt: backup.exportedAt,
+            installationId: syncStatus.installationId,
+            force: true,
+          });
+          recordSyncJob({
+            provider: 'convex',
+            operation: 'force_push',
+            status: 'success',
+            syncChannel: syncStatus.syncChannel,
+            fingerprint,
+            remoteFingerprint: result.fingerprint,
+            message: 'Force-pushed local companion state to Convex and replaced the remote snapshot.',
+          });
+          saveCompanionSyncSnapshot({
+            provider: 'convex',
+            lastExportedAt: backup.exportedAt,
+            lastPushedAt: Date.now(),
+            lastFingerprint: fingerprint,
+            remoteFingerprint: result.fingerprint,
+            remoteExportedAt: result.exportedAt,
+            remoteUpdatedAt: result.updatedAt,
+            remoteInstallationId: result.updatedByInstallationId,
+            lastConflictAt: null,
+            lastConflictFingerprint: null,
+            lastError: null,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Convex force push failed.';
+          recordSyncJob({
+            provider: 'convex',
+            operation: 'force_push',
+            status: 'error',
+            syncChannel: syncStatus.syncChannel,
+            fingerprint,
+            message,
+          });
+          saveCompanionSyncSnapshot({
+            provider: 'convex',
+            lastError: message,
+          });
+          window.alert(message);
+        }
+      },
+      onPullSync: async () => {
+        const syncStatus = loadCompanionSyncSnapshot();
+        if (syncStatus.provider === 'convex') {
+          try {
+            const remote = await pullConvexCompanionSyncPayload(syncStatus.syncChannel);
+            if (!remote) {
+              recordSyncJob({
+                provider: 'convex',
+                operation: 'pull',
+                status: 'error',
+                syncChannel: syncStatus.syncChannel,
+                message: 'No remote snapshot exists yet for this sync channel.',
+              });
+              saveCompanionSyncSnapshot({
+                provider: 'convex',
+                lastError: 'No remote snapshot exists yet for this sync channel.',
+              });
+              window.alert('No remote companion snapshot exists yet for this sync channel.');
+              return;
+            }
+            const backup = parseCompanionBackupDocument(remote.payload);
+            if (!backup) {
+              recordSyncJob({
+                provider: 'convex',
+                operation: 'pull',
+                status: 'error',
+                syncChannel: syncStatus.syncChannel,
+                remoteFingerprint: remote.fingerprint,
+                message: 'Remote companion snapshot is invalid.',
+              });
+              saveCompanionSyncSnapshot({
+                provider: 'convex',
+                lastError: 'Remote companion snapshot is invalid.',
+              });
+              window.alert('Remote companion snapshot is invalid.');
+              return;
+            }
+            recordSyncJob({
+              provider: 'convex',
+              operation: 'pull',
+              status: 'success',
+              syncChannel: syncStatus.syncChannel,
+              fingerprint: remote.fingerprint,
+              remoteFingerprint: remote.fingerprint,
+              message: 'Pulled remote companion state from Convex.',
+            });
+            saveCompanionSyncSnapshot({
+              provider: 'convex',
+              lastImportedAt: Date.now(),
+              lastPulledAt: Date.now(),
+              lastFingerprint: remote.fingerprint,
+              remoteFingerprint: remote.fingerprint,
+              remoteExportedAt: remote.exportedAt,
+              remoteUpdatedAt: remote.updatedAt,
+              remoteInstallationId: remote.updatedByInstallationId,
+              lastConflictAt: null,
+              lastConflictFingerprint: null,
+              lastError: null,
+            });
+            restoreCompanionBackupDocument(backup, {
+              sessionStore: this.ctx.sessionStore,
+              workspaceStore: this.ctx.workspaceStore,
+              inboxStore: this.ctx.inboxStore,
+              briefingStore: this.ctx.briefingStore,
+            });
+            window.location.reload();
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'Convex sync pull failed.';
+            recordSyncJob({
+              provider: 'convex',
+              operation: 'pull',
+              status: 'error',
+              syncChannel: syncStatus.syncChannel,
+              message,
+            });
+            saveCompanionSyncSnapshot({
+              provider: 'convex',
+              lastError: message,
+            });
+            window.alert(message);
+          }
+          return;
+        }
+        const raw = pullManualCompanionSyncPayload();
+        if (!raw) {
+          recordSyncJob({
+            provider: 'manual',
+            operation: 'pull',
+            status: 'error',
+            message: 'No manual sync snapshot is stored yet.',
+          });
+          window.alert('No pushed companion snapshot is stored yet.');
+          return;
+        }
+        const backup = parseCompanionBackupDocument(raw);
+        if (!backup) {
+          recordSyncJob({
+            provider: 'manual',
+            operation: 'pull',
+            status: 'error',
+            fingerprint: buildCompanionFingerprint(raw),
+            message: 'Stored manual companion snapshot is invalid.',
+          });
+          window.alert('Stored companion snapshot is invalid.');
+          return;
+        }
+        recordSyncJob({
+          provider: 'manual',
+          operation: 'pull',
+          status: 'success',
+          fingerprint: buildCompanionFingerprint(raw),
+          message: 'Restored local companion state from a manual sync snapshot.',
+        });
+        restoreCompanionBackupDocument(backup, {
+          sessionStore: this.ctx.sessionStore,
+          workspaceStore: this.ctx.workspaceStore,
+          inboxStore: this.ctx.inboxStore,
+          briefingStore: this.ctx.briefingStore,
+        });
+        saveCompanionSyncSnapshot({
+          provider: 'manual',
+          lastImportedAt: Date.now(),
+          lastError: null,
+        });
+        window.location.reload();
+      },
+    }));
+
+    this.createPanel('companion-inbox', () => new CompanionInboxPanel({
+      getData: () => {
+        const homeData = getCompanionHomeData();
+        return {
+          activeWorkspace: homeData.activeWorkspace,
+          inboxItems: homeData.inboxItems,
+          newSincePreviousVisit: homeData.newSincePreviousVisit,
+        };
+      },
+      subscribe: subscribeCompanionState,
+      onSetItemState: (itemId, state) => {
+        this.ctx.inboxStore.setItemState(itemId, state);
+      },
+      onToggleSnoozeItem: toggleInboxSnooze,
+      onToggleItemTag: toggleInboxTag,
+      onSetItemFeedback: setInboxFeedback,
+      onCreateActionFromItem: createActionFromInboxItem,
+      onCreateNoteFromItem: createNoteFromInboxItem,
+      onCreateThreadFromItem: createThreadFromInboxItem,
+    }));
+
+    this.createPanel('companion-ask', () => new CompanionAskPanel({
+      getData: () => {
+        const homeData = getCompanionHomeData();
+        return {
+          activeWorkspace: homeData.activeWorkspace,
+          askRuns: homeData.askRuns,
+          inboxItems: homeData.inboxItems,
+          briefs: homeData.briefs,
+          notes: homeData.notes,
+          threads: homeData.threads,
+        };
+      },
+      subscribe: subscribeCompanionState,
+      onAskWorkspace: (question) => {
+        const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+          this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+        );
+        if (!workspace) return;
+        void buildWorkspaceAskRun({
+          workspace,
+          question,
+          items: this.ctx.inboxStore.listItems(workspace.id),
+          briefRuns: this.ctx.briefingStore.listRuns(workspace.id),
+          notes: listNotes(workspace.id),
+          threads: listThreads(workspace.id),
+        }).then((run) => {
+          saveAskRun({
+            workspaceId: run.workspaceId,
+            intent: run.intent,
+            question: run.question,
+            answer: run.answer,
+            citedItemIds: run.citedItemIds,
+            citedBriefRunIds: run.citedBriefRunIds,
+            citedNoteIds: run.citedNoteIds,
+            citedFollowIds: run.citedFollowIds,
+            citedThreadIds: run.citedThreadIds,
+          });
+        }).catch((error) => {
+          console.warn('[CompanionAsk] Failed to build ask run:', error);
+        });
+      },
+      onSaveAskRunAsNote: (askRunId) => {
+        const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+          this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+        );
+        if (!workspace) return;
+        const run = listAskRuns(workspace.id).find((entry) => entry.id === askRunId);
+        if (!run) return;
+        saveNote({
+          workspaceId: workspace.id,
+          title: run.question,
+          body: run.answer,
+          tags: ['ask'],
+          linkedItemIds: run.citedItemIds,
+          linkedFollowIds: run.citedFollowIds,
+        });
+      },
+      onSaveAskRunAsAction: (askRunId) => {
+        const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+          this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+        );
+        if (!workspace) return;
+        const run = listAskRuns(workspace.id).find((entry) => entry.id === askRunId);
+        if (!run) return;
+        saveAction({
+          workspaceId: workspace.id,
+          title: `Review: ${run.question}`,
+          status: 'open',
+          relatedItemIds: run.citedItemIds,
+          relatedFollowIds: run.citedFollowIds,
+          dueAt: Date.now() + 24 * 60 * 60 * 1000,
+        });
+      },
+      onCreateThreadFromAskRun: (askRunId) => {
+        const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+          this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+        );
+        if (!workspace) return;
+        const run = listAskRuns(workspace.id).find((entry) => entry.id === askRunId);
+        if (!run) return;
+        saveThread({
+          workspaceId: workspace.id,
+          title: run.question,
+          summary: run.answer.slice(0, 220),
+          linkedItemIds: run.citedItemIds,
+          linkedNoteIds: run.citedNoteIds,
+          linkedActionIds: [],
+          linkedFollowIds: run.citedFollowIds,
+          linkedBriefRunIds: run.citedBriefRunIds,
+          linkedAskRunIds: [run.id],
+        });
+      },
+    }));
+
+    this.createPanel('companion-threads', () => new CompanionThreadsPanel({
+      getData: () => {
+        const homeData = getCompanionHomeData();
+        return {
+          activeWorkspace: homeData.activeWorkspace,
+          threads: homeData.threads,
+          inboxItems: homeData.inboxItems,
+          notes: homeData.notes,
+          actions: homeData.actions,
+          askRuns: homeData.askRuns,
+          briefs: homeData.briefs,
+        };
+      },
+      subscribe: subscribeCompanionState,
+      onCreateThread: ({ id, title, summary }) => {
+        const workspace = this.ctx.workspaceStore.getActiveWorkspace(
+          this.ctx.sessionStore.getSnapshot().activeWorkspaceId,
+        );
+        if (!workspace) return;
+        const existing = id
+          ? listThreads(workspace.id).find((thread) => thread.id === id) ?? null
+          : null;
+        saveThread({
+          id,
+          workspaceId: workspace.id,
+          title,
+          summary,
+          linkedItemIds: existing?.linkedItemIds ?? [],
+          linkedNoteIds: existing?.linkedNoteIds ?? [],
+          linkedActionIds: existing?.linkedActionIds ?? [],
+          linkedFollowIds: existing?.linkedFollowIds ?? [],
+          linkedBriefRunIds: existing?.linkedBriefRunIds ?? [],
+          linkedAskRunIds: existing?.linkedAskRunIds ?? [],
+        });
+      },
+      onDeleteThread: (threadId) => {
+        deleteThread(threadId);
+      },
+    }));
+
     const monitorPanel = this.createPanel('monitors', () => new MonitorPanel(this.ctx.monitors));
     monitorPanel?.onChanged((monitors) => {
       this.ctx.monitors = monitors;
       saveToStorage(STORAGE_KEYS.monitors, monitors);
       this.callbacks.updateMonitorResults();
+      this.callbacks.syncCompanionStores?.();
     });
 
     this.createPanel('commodities', () => new CommoditiesPanel());

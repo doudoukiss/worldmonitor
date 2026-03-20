@@ -157,6 +157,10 @@ export const COMMANDS: Command[] = [
   { id: 'time:24h', keywords: ['24h', 'last 24 hours', 'today'], label: 'Show events from last 24 hours', icon: '\u{1F55B}', category: 'actions' },
   { id: 'time:48h', keywords: ['48h', '2 days', 'last 2 days'], label: 'Show events from last 48 hours', icon: '\u{1F4C5}', category: 'actions' },
   { id: 'time:7d', keywords: ['7d', 'week', 'last week', '7 days'], label: 'Show events from last 7 days', icon: '\u{1F5D3}\uFE0F', category: 'actions' },
+  { id: 'companion:follow', keywords: ['follow', 'track', 'watch', 'add follow'], label: 'Create a follow from the current query', icon: '\u{1F4CC}', category: 'actions' },
+  { id: 'companion:ask', keywords: ['ask', 'explain', 'compare', 'why does this matter', 'why', 'question'], label: 'Ask the active workspace about the current query', icon: '\u{1F9E0}', category: 'actions' },
+  { id: 'companion:brief', keywords: ['brief me', 'summarize', 'summary', 'what changed', 'workspace brief'], label: 'Generate a workspace brief from the current query', icon: '\u{1F4C4}', category: 'actions' },
+  { id: 'companion:note', keywords: ['note', 'capture note', 'remember', 'memo'], label: 'Capture a note from the current query', icon: '\u270D\uFE0F', category: 'actions' },
 ];
 
 // All ISO 3166-1 alpha-2 codes — Intl.DisplayNames resolves human-readable names at runtime

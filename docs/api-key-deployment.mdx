@@ -33,6 +33,7 @@ Desktop App                          Cloud (Vercel)
 |----------|-------------|---------|
 | `WORLDMONITOR_VALID_KEYS` | Comma-separated list of valid API keys | `wm_abc123def456,wm_xyz789` |
 | `CONVEX_URL` | Convex deployment URL (from `npx convex deploy`) | `https://xyz-123.convex.cloud` |
+| `VITE_CONVEX_URL` | Public Convex deployment URL for optional browser/desktop companion sync | `https://xyz-123.convex.cloud` |
 
 ### Generating API keys
 
@@ -77,6 +78,50 @@ npx convex dev --typecheck
 npx convex dashboard
 ```
 
+## Optional Companion Sync Setup
+
+The personal companion can now use Convex as an optional remote sync provider.
+This is separate from the desktop API-key gate and remains opt-in.
+
+### Required steps
+
+1. Deploy the updated Convex schema and functions:
+
+```bash
+npx convex deploy
+```
+
+This must include:
+
+- `convex/schema.ts`
+- `convex/companionSync.ts`
+
+2. Set both of these environment variables:
+
+- `CONVEX_URL` for server-side registration/contact flows
+- `VITE_CONVEX_URL` for browser/desktop companion sync
+
+3. In the companion UI:
+
+- switch sync mode to `Sync`
+- choose provider `Convex`
+- save one shared sync channel on each install
+- `Push` from the source install
+- `Pull` from the destination install
+
+### Conflict policy
+
+- Normal `Push` is last-writer-wins only when the local export is not older than the remote snapshot.
+- If the remote snapshot is newer, the UI records a conflict and blocks overwrite.
+- `Force Push` deliberately replaces the remote snapshot and should only be used when you intend to discard the remote copy.
+
+### Recommended first-run flow
+
+1. Use the suggested sync channel generated in the UI, or enter your own stable channel name.
+2. Push from your primary install first.
+3. Pull from the second install before making local edits there.
+4. Only use `Force Push` if you have explicitly decided which install should win.
+
 ### Schema
 
 The `registrations` table stores:
@@ -118,6 +163,7 @@ After deployment:
 
 - [ ] Set `WORLDMONITOR_VALID_KEYS` in Vercel
 - [ ] Set `CONVEX_URL` in Vercel
+- [ ] Set `VITE_CONVEX_URL` in the app environment
 - [ ] Run `npx convex deploy` to push schema
 - [ ] Desktop without key: cloud fallback blocked (console shows `cloud fallback blocked`)
 - [ ] Desktop with invalid key: sebuf requests get `401`
@@ -125,6 +171,8 @@ After deployment:
 - [ ] Web access: no key required, works normally
 - [ ] Registration form: submit email, check Convex dashboard
 - [ ] Duplicate email: shows "already registered"
+- [ ] Companion sync: push from one install, pull from another
+- [ ] Companion sync conflict: newer remote blocks ordinary push
 - [ ] Existing settings tabs (LLMs, API Keys, Debug) unchanged
 
 ## Files Reference
@@ -140,3 +188,6 @@ After deployment:
 | `src/components/WorldMonitorTab.ts` | Settings UI for key + registration |
 | `convex/schema.ts` | Convex DB schema |
 | `convex/registerInterest.ts` | Convex mutation |
+| `convex/companionSync.ts` | Convex companion sync query/mutation |
+| `src/services/companion-sync.ts` | Local sync state + provider metadata |
+| `src/services/companion-sync-convex.ts` | Convex sync adapter |

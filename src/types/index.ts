@@ -37,6 +37,204 @@ export type DataSourceId =
 // AppContext lives in src/app/app-context.ts because it references
 // components, services, and utils (top-level aggregate type).
 
+export type WorkspaceTemplateId = 'full' | 'tech' | 'finance' | 'happy' | 'commodity' | 'custom';
+
+export type FollowKind =
+  | 'ticker'
+  | 'keyword_set'
+  | 'country'
+  | 'topic'
+  | 'source'
+  | 'region'
+  | 'route'
+  | 'custom_query';
+
+export type FollowSource = 'legacy-monitor' | 'legacy-watchlist' | 'manual';
+
+export interface Follow {
+  id: string;
+  kind: FollowKind;
+  label: string;
+  query: string;
+  source: FollowSource;
+  symbol?: string;
+  keywords?: string[];
+  note?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type InboxItemKind = 'article' | 'quote_move' | 'prediction' | 'note' | 'system';
+export type InboxItemState = 'new' | 'seen' | 'saved' | 'dismissed' | 'snoozed';
+
+export interface InboxItem {
+  id: string;
+  kind: InboxItemKind;
+  title: string;
+  subtitle?: string;
+  source: string;
+  url?: string;
+  workspaceIds: string[];
+  relatedFollowIds: string[];
+  occurredAt: number;
+  state: InboxItemState;
+  tags: string[];
+  snoozedUntil?: number | null;
+  feedback?: 'useful' | 'not_useful' | 'too_noisy' | null;
+  score: number;
+  createdAt: number;
+  updatedAt: number;
+  metadata?: Record<string, string | number | boolean | null>;
+}
+
+export type BriefRecipeKind =
+  | 'workspace_morning'
+  | 'workspace_delta'
+  | 'follow_digest'
+  | 'topic_explainer'
+  | 'decision_prep';
+
+export interface BriefRecipe {
+  id: string;
+  workspaceId: string;
+  kind: BriefRecipeKind;
+  title: string;
+  promptHint?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface BriefRun {
+  id: string;
+  workspaceId: string;
+  recipeId: string;
+  kind: BriefRecipeKind;
+  title: string;
+  summary: string;
+  sourceItemIds: string[];
+  sourceCount: number;
+  inputSignature: string;
+  generatedAt: number;
+  status: 'ready' | 'stale';
+}
+
+export interface MemoryNote {
+  id: string;
+  workspaceId: string;
+  title: string;
+  body: string;
+  tags: string[];
+  linkedItemIds: string[];
+  linkedFollowIds: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ActionItem {
+  id: string;
+  workspaceId: string;
+  title: string;
+  status: 'open' | 'done' | 'snoozed';
+  relatedItemIds: string[];
+  relatedFollowIds: string[];
+  dueAt?: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface Thread {
+  id: string;
+  workspaceId: string;
+  title: string;
+  summary: string;
+  linkedItemIds: string[];
+  linkedNoteIds: string[];
+  linkedActionIds: string[];
+  linkedFollowIds: string[];
+  linkedBriefRunIds: string[];
+  linkedAskRunIds: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AskRun {
+  id: string;
+  workspaceId: string;
+  intent: 'general' | 'compare' | 'explain' | 'why';
+  question: string;
+  answer: string;
+  citedItemIds: string[];
+  citedBriefRunIds: string[];
+  citedNoteIds: string[];
+  citedFollowIds: string[];
+  citedThreadIds: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AutomationEvent {
+  id: string;
+  workspaceId: string;
+  ruleId: string;
+  trigger: AutomationRule['trigger'];
+  action: AutomationRule['action'];
+  title: string;
+  subtitle: string;
+  score: number;
+  dedupeKey: string;
+  metadata: Record<string, string | number | boolean | null>;
+  createdAt: number;
+}
+
+export interface AutomationRule {
+  id: string;
+  workspaceId: string;
+  name: string;
+  enabled: boolean;
+  trigger: 'high_priority_item' | 'saved_item' | 'brief_ready' | 'stale_workspace' | 'follow_hit';
+  action: 'in_app' | 'desktop' | 'queue_brief' | 'create_action';
+  minimumScore: number;
+  mutedUntil?: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SyncJob {
+  id: string;
+  provider: 'manual' | 'convex';
+  operation: 'push' | 'pull' | 'force_push' | 'probe';
+  status: 'success' | 'conflict' | 'error';
+  syncChannel?: string;
+  fingerprint?: string | null;
+  remoteFingerprint?: string | null;
+  message: string;
+  createdAt: number;
+}
+
+export interface Profile {
+  id: string;
+  displayName: string;
+  preferredLanguage: string;
+  preferredBriefTone: 'concise' | 'balanced' | 'deep';
+  syncMode: 'local' | 'sync';
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface Workspace {
+  id: string;
+  name: string;
+  template: WorkspaceTemplateId;
+  description?: string;
+  legacyBacked: boolean;
+  follows: Follow[];
+  pinnedPanelIds: string[];
+  panelSettings: Record<string, PanelConfig>;
+  mapLayers: MapLayers;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export type HappyContentCategory =
   | 'science-health'
   | 'nature-wildlife'

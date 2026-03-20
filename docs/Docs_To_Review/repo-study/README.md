@@ -54,3 +54,5 @@ runtime glue, build config, and guardrail tests.
 - `api-data-pipeline.md`
 - `desktop-security.md`
 - `quality-and-drift.md`
+- `data-source-availability-audit.md`
+- `gui-source-map.md`

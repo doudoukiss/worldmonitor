@@ -194,6 +194,7 @@ const CYBER_LAYER_ENABLED = import.meta.env.VITE_ENABLE_CYBER_LAYER === 'true';
 export interface DataLoaderCallbacks {
   renderCriticalBanner: (postures: TheaterPostureSummary[]) => void;
   refreshOpenCountryBrief: () => void;
+  syncCompanionStores: () => void;
 }
 
 export class DataLoaderManager implements AppModule {
@@ -516,6 +517,7 @@ export class DataLoaderManager implements AppModule {
       }
     }
 
+    this.callbacks.syncCompanionStores();
     this.updateSearchIndex();
 
     if (getSecretState('WORLDMONITOR_API_KEY').present) {
@@ -1059,6 +1061,7 @@ export class DataLoaderManager implements AppModule {
     this.ctx.allNews = collectedNews;
     this.ctx.initialLoadComplete = true;
     mountCommunityWidget();
+    this.callbacks.syncCompanionStores();
 
     this.ctx.map?.updateHotspotActivity(this.ctx.allNews);
 
@@ -1222,6 +1225,8 @@ export class DataLoaderManager implements AppModule {
         this.ctx.latestMarkets = stocksResult.data;
         marketsPanel?.renderMarkets(stocksResult.data, stocksResult.rateLimited);
       }
+
+      this.callbacks.syncCompanionStores();
 
       const finnhubConfigMsg = 'FINNHUB_API_KEY not configured — add in Settings';
 
@@ -1415,6 +1420,7 @@ export class DataLoaderManager implements AppModule {
     try {
       const predictions = await fetchPredictions({ region: this.ctx.resolvedLocation });
       this.ctx.latestPredictions = predictions;
+      this.callbacks.syncCompanionStores();
       (this.ctx.panels['polymarket'] as PredictionPanel | undefined)?.renderPredictions(predictions);
 
       this.ctx.statusPanel?.updateFeed('Polymarket', { status: 'ok', itemCount: predictions.length });

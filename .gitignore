@@ -6,6 +6,7 @@ public/blog/
 *.log
 .env
 .env.local
+keys.txt
 .playwright-mcp/
 .vercel
 api/\[domain\]/v1/\[rpc\].js

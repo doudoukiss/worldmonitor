@@ -14,6 +14,7 @@ import {
 import { sanitizeLayersForVariant } from '@/config/map-layer-definitions';
 import type { MapVariant } from '@/config/map-layer-definitions';
 import { initDB, cleanOldSnapshots, isAisConfigured, initAisStream, isOutagesConfigured, disconnectAisStream } from '@/services';
+import { getMarketWatchlistEntries } from '@/services/market-watchlist';
 import { mlWorker } from '@/services/ml-worker';
 import { getAiFlowSettings, subscribeAiFlowChange, isHeadlineMemoryEnabled } from '@/services/ai-flow-settings';
 import { startLearning } from '@/services/country-instability';
@@ -44,8 +45,25 @@ import { RefreshScheduler } from '@/app/refresh-scheduler';
 import { PanelLayoutManager } from '@/app/panel-layout';
 import { DataLoaderManager } from '@/app/data-loader';
 import { EventHandlerManager } from '@/app/event-handlers';
+import { SessionStore } from '@/app/session-store';
+import { WorkspaceStore } from '@/app/workspace-store';
+import { InboxStore } from '@/app/inbox-store';
+import { BriefingStore } from '@/app/briefing-store';
+import { coerceWorkspaceTemplateId } from '@/services/workspace-store';
+import { activateWorkspaceRuntime } from '@/services/workspace-runtime';
 import { resolveUserRegion, resolvePreciseUserCoordinates, type PreciseCoordinates } from '@/utils/user-location';
 import { showProBanner } from '@/components/ProBanner';
+import {
+  listAutomationRules,
+} from '@/services/automation-store';
+import { saveAction } from '@/services/action-store';
+import {
+  commitAutomationEvent,
+  evaluateBriefAutomationRules,
+  evaluateInboxAutomationRules,
+  evaluateWorkspaceAutomationRules,
+} from '@/services/automation-engine';
+import { buildWorkspaceBriefInputSignature, buildWorkspaceBriefRun, selectWorkspaceBriefItems } from '@/services/companion-briefing';
 import {
   CorrelationEngine,
   militaryAdapter,
@@ -105,6 +123,206 @@ export class App {
 
   private shouldRefreshCorrelation(): boolean {
     return this.isAnyPanelNearViewport(['military-correlation', 'escalation-correlation', 'economic-correlation', 'disaster-correlation']);
+  }
+
+  private clonePanelSettings(panelSettings: Record<string, PanelConfig>): Record<string, PanelConfig> {
+    return Object.fromEntries(
+      Object.entries(panelSettings).map(([key, value]) => [key, { ...value }]),
+    );
+  }
+
+  private canHotApplyWorkspace(workspace: import('@/types').Workspace): boolean {
+    return !Object.entries(workspace.panelSettings).some(([key, config]) => (
+      key !== 'map' && config.enabled && !this.state.panels[key]
+    ));
+  }
+
+  private activateWorkspace(workspaceId: string): void {
+    if (workspaceId === this.state.sessionStore.getSnapshot().activeWorkspaceId) return;
+
+    this.syncCompanionStores();
+    const workspace = this.state.workspaceStore.getWorkspace(workspaceId);
+    if (!workspace) return;
+
+    this.state.sessionStore.setActiveWorkspaceId(workspaceId);
+
+    if (!this.canHotApplyWorkspace(workspace)) {
+      activateWorkspaceRuntime(workspace);
+      return;
+    }
+
+    this.state.panelSettings = this.clonePanelSettings(workspace.panelSettings);
+    this.state.mapLayers = { ...workspace.mapLayers };
+    saveToStorage(STORAGE_KEYS.panels, this.state.panelSettings);
+    saveToStorage(STORAGE_KEYS.mapLayers, this.state.mapLayers);
+
+    this.panelLayout.applyPanelSettings();
+    this.eventHandlers.applyPanelSettings();
+    this.state.map?.setLayers(this.state.mapLayers);
+    this.dataLoader.syncDataFreshnessWithLayers();
+    this.eventHandlers.syncUrlState();
+    this.state.unifiedSettings?.refreshPanelToggles();
+    this.searchManager.updateSearchIndex();
+    this.syncCompanionStores();
+    this.eventHandlers.showToast(`Switched to ${workspace.name}`);
+  }
+
+  private syncCompanionStores(): void {
+    const defaultWorkspace = this.state.workspaceStore.ensureDefaultWorkspace({
+      template: coerceWorkspaceTemplateId(SITE_VARIANT),
+      monitors: this.state.monitors,
+      marketWatchlist: getMarketWatchlistEntries(),
+      panelSettings: this.state.panelSettings,
+      mapLayers: this.state.mapLayers,
+    });
+
+    const currentSession = this.state.sessionStore.getSnapshot();
+    if (!this.state.workspaceStore.getWorkspace(currentSession.activeWorkspaceId)) {
+      this.state.sessionStore.setActiveWorkspaceId(defaultWorkspace.id);
+    }
+
+    const activeWorkspace = this.state.workspaceStore.getActiveWorkspace(
+      this.state.sessionStore.getSnapshot().activeWorkspaceId,
+    ) ?? defaultWorkspace;
+
+    if (!activeWorkspace.legacyBacked) {
+      this.state.workspaceStore.updateWorkspace(activeWorkspace.id, {
+        panelSettings: this.state.panelSettings,
+        mapLayers: this.state.mapLayers,
+        pinnedPanelIds: Object.keys(this.state.panelSettings)
+          .filter((key) => this.state.panelSettings[key]?.enabled)
+          .slice(0, 12),
+      });
+    }
+
+    this.state.briefingStore.ensureDefaultRecipes(activeWorkspace);
+    this.state.inboxStore.ensureWelcomeItem(activeWorkspace);
+    this.state.inboxStore.syncFromSignals({
+      workspace: activeWorkspace,
+      news: this.state.allNews,
+      markets: this.state.latestMarkets,
+      predictions: this.state.latestPredictions,
+    });
+
+    const automationRules = listAutomationRules(activeWorkspace.id);
+    const automationEvents = evaluateInboxAutomationRules(
+      activeWorkspace,
+      automationRules,
+      this.state.inboxStore.listItems(activeWorkspace.id),
+    );
+    for (const event of automationEvents.slice(0, 6)) {
+      const committed = commitAutomationEvent(event);
+      if (committed.action === 'create_action') {
+        const sourceItemId = typeof committed.metadata.sourceItemId === 'string'
+          ? committed.metadata.sourceItemId
+          : null;
+        saveAction({
+          workspaceId: activeWorkspace.id,
+          title: `Automation: ${committed.subtitle}`,
+          status: 'open',
+          relatedItemIds: sourceItemId ? [sourceItemId] : [],
+          relatedFollowIds: [],
+          dueAt: Date.now() + 24 * 60 * 60 * 1000,
+        });
+        continue;
+      }
+      this.state.inboxStore.addSystemItem({
+        id: committed.dedupeKey,
+        workspaceId: activeWorkspace.id,
+        title: committed.title,
+        subtitle: committed.subtitle,
+        score: committed.score,
+        metadata: committed.metadata,
+      });
+    }
+
+    const latestBriefGeneratedAt = this.state.briefingStore.listRecipes(activeWorkspace.id)
+      .map((recipe) => this.state.briefingStore.getLatestRun(recipe.id)?.generatedAt ?? null)
+      .filter((value): value is number => typeof value === 'number')
+      .sort((a, b) => b - a)[0] ?? null;
+
+    const workspaceEvents = evaluateWorkspaceAutomationRules(
+      activeWorkspace,
+      automationRules,
+      {
+        previousVisitedAt: this.state.sessionStore.getSnapshot().previousVisitedAt,
+        latestBriefGeneratedAt,
+      },
+    );
+
+    for (const event of workspaceEvents.slice(0, 3)) {
+      const committed = commitAutomationEvent(event);
+      if (committed.action === 'queue_brief') {
+        const recipe = this.state.briefingStore.listRecipes(activeWorkspace.id)
+          .find((entry) => entry.kind === 'workspace_morning');
+        if (recipe) {
+          const session = this.state.sessionStore.getSnapshot();
+          const scopedItems = this.state.inboxStore.listItems(activeWorkspace.id);
+          const candidateItems = selectWorkspaceBriefItems(recipe, scopedItems, session.previousVisitedAt);
+          const inputSignature = buildWorkspaceBriefInputSignature(recipe, candidateItems, session.previousVisitedAt);
+          const reusableRun = this.state.briefingStore.findReusableRun(recipe.id, inputSignature);
+          if (!reusableRun) {
+            void buildWorkspaceBriefRun({
+              workspace: activeWorkspace,
+              recipe,
+              items: scopedItems,
+              previousVisitedAt: session.previousVisitedAt,
+            }).then((run) => {
+              this.state.briefingStore.saveRun(run);
+              const briefEvents = evaluateBriefAutomationRules(
+                activeWorkspace,
+                automationRules,
+                run,
+              );
+              for (const briefEvent of briefEvents.slice(0, 3)) {
+                const committedBriefEvent = commitAutomationEvent(briefEvent);
+                if (committedBriefEvent.action === 'create_action') {
+                  saveAction({
+                    workspaceId: activeWorkspace.id,
+                    title: `Automation: ${committedBriefEvent.subtitle}`,
+                    status: 'open',
+                    relatedItemIds: [],
+                    relatedFollowIds: [],
+                    dueAt: Date.now() + 24 * 60 * 60 * 1000,
+                  });
+                  continue;
+                }
+                this.state.inboxStore.addSystemItem({
+                  id: committedBriefEvent.dedupeKey,
+                  workspaceId: activeWorkspace.id,
+                  title: committedBriefEvent.title,
+                  subtitle: committedBriefEvent.subtitle,
+                  score: committedBriefEvent.score,
+                  metadata: committedBriefEvent.metadata,
+                });
+              }
+            }).catch((error) => {
+              console.warn('[Automation] Failed queued brief generation:', error);
+            });
+          }
+        }
+        continue;
+      }
+      if (committed.action === 'create_action') {
+        saveAction({
+          workspaceId: activeWorkspace.id,
+          title: `Automation: ${committed.title}`,
+          status: 'open',
+          relatedItemIds: [],
+          relatedFollowIds: [],
+          dueAt: Date.now() + 24 * 60 * 60 * 1000,
+        });
+        continue;
+      }
+      this.state.inboxStore.addSystemItem({
+        id: committed.dedupeKey,
+        workspaceId: activeWorkspace.id,
+        title: committed.title,
+        subtitle: committed.subtitle,
+        score: committed.score,
+        metadata: committed.metadata,
+      });
+    }
   }
 
   private async primeVisiblePanelData(forceAll = false): Promise<void> {
@@ -196,6 +414,7 @@ export class App {
     const isMobile = isMobileDevice();
     const isDesktopApp = isDesktopRuntime();
     const monitors = loadFromStorage<Monitor[]>(STORAGE_KEYS.monitors, []);
+    const marketWatchlist = getMarketWatchlistEntries();
 
     // Use mobile-specific defaults on first load (no saved layers)
     const defaultLayers = isMobile ? MOBILE_DEFAULT_MAP_LAYERS : DEFAULT_MAP_LAYERS;
@@ -407,6 +626,26 @@ export class App {
     }
 
     const disabledSources = new Set(loadFromStorage<string[]>(STORAGE_KEYS.disabledFeeds, []));
+    const sessionStore = new SessionStore();
+    const workspaceStore = new WorkspaceStore();
+    const inboxStore = new InboxStore();
+    const briefingStore = new BriefingStore();
+
+    const defaultWorkspace = workspaceStore.ensureDefaultWorkspace({
+      template: coerceWorkspaceTemplateId(SITE_VARIANT),
+      monitors,
+      marketWatchlist,
+      panelSettings,
+      mapLayers,
+    });
+
+    if (!workspaceStore.getWorkspace(sessionStore.getSnapshot().activeWorkspaceId)) {
+      sessionStore.setActiveWorkspaceId(defaultWorkspace.id);
+    }
+
+    const activeWorkspace = workspaceStore.getActiveWorkspace(sessionStore.getSnapshot().activeWorkspaceId) ?? defaultWorkspace;
+    briefingStore.ensureDefaultRecipes(activeWorkspace);
+    inboxStore.ensureWelcomeItem(activeWorkspace);
 
     // Build shared state object
     this.state = {
@@ -414,6 +653,10 @@ export class App {
       isMobile,
       isDesktopApp,
       container: el,
+      sessionStore,
+      workspaceStore,
+      inboxStore,
+      briefingStore,
       panels: {},
       newsPanels: {},
       panelSettings,
@@ -471,10 +714,12 @@ export class App {
     this.dataLoader = new DataLoaderManager(this.state, {
       renderCriticalBanner: (postures) => this.panelLayout.renderCriticalBanner(postures),
       refreshOpenCountryBrief: () => this.countryIntel.refreshOpenBrief(),
+      syncCompanionStores: () => this.syncCompanionStores(),
     });
 
     this.searchManager = new SearchManager(this.state, {
       openCountryBriefByCode: (code, country) => this.countryIntel.openCountryBriefByCode(code, country),
+      activateWorkspace: (workspaceId) => this.activateWorkspace(workspaceId),
     });
 
     this.panelLayout = new PanelLayoutManager(this.state, {
@@ -483,9 +728,11 @@ export class App {
         const name = CountryIntelManager.resolveCountryName(code);
         void this.countryIntel.openCountryBriefByCode(code, name);
       },
+      activateWorkspace: (workspaceId) => this.activateWorkspace(workspaceId),
       loadAllData: () => this.dataLoader.loadAllData(),
       updateMonitorResults: () => this.dataLoader.updateMonitorResults(),
       loadSecurityAdvisories: () => this.dataLoader.loadSecurityAdvisories(),
+      syncCompanionStores: () => this.syncCompanionStores(),
     });
 
     this.eventHandlers = new EventHandlerManager(this.state, {
@@ -497,6 +744,7 @@ export class App {
       waitForAisData: () => this.dataLoader.waitForAisData(),
       syncDataFreshnessWithLayers: () => this.dataLoader.syncDataFreshnessWithLayers(),
       ensureCorrectZones: () => this.panelLayout.ensureCorrectZones(),
+      syncCompanionStores: () => this.syncCompanionStores(),
       refreshOpenCountryBrief: () => this.countryIntel.refreshOpenBrief(),
       stopLayerActivity: (layer) => this.dataLoader.stopLayerActivity(layer),
     });
@@ -518,6 +766,7 @@ export class App {
 
   public async init(): Promise<void> {
     const initStart = performance.now();
+    this.state.sessionStore.markVisit();
     await initDB();
     await initI18n();
     const aiFlow = getAiFlowSettings();
@@ -708,6 +957,7 @@ export class App {
       panel_count: Object.keys(this.state.panels).length,
     });
     this.eventHandlers.setupPanelViewTracking();
+    this.syncCompanionStores();
   }
 
   public destroy(): void {

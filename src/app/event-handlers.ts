@@ -68,6 +68,7 @@ export interface EventHandlerCallbacks {
   waitForAisData: () => void;
   syncDataFreshnessWithLayers: () => void;
   ensureCorrectZones: () => void;
+  syncCompanionStores?: () => void;
   refreshOpenCountryBrief?: () => void;
   stopLayerActivity?: (layer: keyof MapLayers) => void;
 }
@@ -134,6 +135,7 @@ export class EventHandlerManager implements AppModule {
     saveToStorage(STORAGE_KEYS.panels, this.ctx.panelSettings);
     this.applyPanelSettings();
     this.ctx.unifiedSettings?.refreshPanelToggles();
+    this.callbacks.syncCompanionStores?.();
 
     // Ensure restored panel fetches fresh data (otherwise it may show no content)
     const panel = this.ctx.panels[panelId];
@@ -337,6 +339,7 @@ export class EventHandlerManager implements AppModule {
         delete this.ctx.panels[panelId];
         delete this.ctx.panelSettings[panelId];
         saveToStorage(STORAGE_KEYS.panels, this.ctx.panelSettings);
+        this.callbacks.syncCompanionStores?.();
         panel?.getElement()?.remove();
         return;
       }
@@ -349,6 +352,7 @@ export class EventHandlerManager implements AppModule {
         delete this.ctx.panels[panelId];
         delete this.ctx.panelSettings[panelId];
         saveToStorage(STORAGE_KEYS.panels, this.ctx.panelSettings);
+        this.callbacks.syncCompanionStores?.();
         panel?.getElement()?.remove();
         return;
       }
@@ -360,6 +364,7 @@ export class EventHandlerManager implements AppModule {
       saveToStorage(STORAGE_KEYS.panels, this.ctx.panelSettings);
       this.applyPanelSettings();
       this.ctx.unifiedSettings?.refreshPanelToggles();
+      this.callbacks.syncCompanionStores?.();
       // push to undo stack (cap size for memory safety)
       this.closedPanelStack.push(panelId);
       if (this.closedPanelStack.length > 20) this.closedPanelStack.shift();
@@ -935,6 +940,7 @@ export class EventHandlerManager implements AppModule {
         });
         saveToStorage(STORAGE_KEYS.panels, this.ctx.panelSettings);
         this.applyPanelSettings();
+        this.callbacks.syncCompanionStores?.();
       },
       getDisabledSources: () => this.ctx.disabledSources,
       toggleSource: (name: string) => {
@@ -1051,6 +1057,7 @@ export class EventHandlerManager implements AppModule {
       trackMapLayerToggle(layer, enabled, source);
       this.ctx.mapLayers[layer] = enabled;
       saveToStorage(STORAGE_KEYS.mapLayers, this.ctx.mapLayers);
+      this.callbacks.syncCompanionStores?.();
       this.syncUrlState();
 
       const sourceIds = LAYER_TO_SOURCE[layer];
