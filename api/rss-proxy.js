@@ -3,6 +3,7 @@ import { validateApiKey } from './_api-key.js';
 import { checkRateLimit } from './_rate-limit.js';
 import { getRelayBaseUrl, getRelayHeaders, fetchWithTimeout } from './_relay.js';
 import RSS_ALLOWED_DOMAINS from './_rss-allowed-domains.js';
+import { jsonResponse } from './_json-response.js';
 
 export const config = { runtime: 'edge' };
 
@@ -56,14 +57,19 @@ function isAllowedDomain(hostname) {
   return ALLOWED_DOMAINS.includes(hostname) || ALLOWED_DOMAINS.includes(bare) || ALLOWED_DOMAINS.includes(withWww);
 }
 
+function isGoogleNewsFeedUrl(feedUrl) {
+  try {
+    return new URL(feedUrl).hostname === 'news.google.com';
+  } catch {
+    return false;
+  }
+}
+
 export default async function handler(req) {
   const corsHeaders = getCorsHeaders(req, 'GET, OPTIONS');
 
   if (isDisallowedOrigin(req)) {
-    return new Response(JSON.stringify({ error: 'Origin not allowed' }), {
-      status: 403,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders },
-    });
+    return jsonResponse({ error: 'Origin not allowed' }, 403, corsHeaders);
   }
 
   // Handle CORS preflight
@@ -71,18 +77,12 @@ export default async function handler(req) {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
   if (req.method !== 'GET') {
-    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
-      status: 405,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders },
-    });
+    return jsonResponse({ error: 'Method not allowed' }, 405, corsHeaders);
   }
 
   const keyCheck = validateApiKey(req);
   if (keyCheck.required && !keyCheck.valid) {
-    return new Response(JSON.stringify({ error: keyCheck.error }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders },
-    });
+    return jsonResponse({ error: keyCheck.error }, 401, corsHeaders);
   }
 
   const rateLimitResponse = await checkRateLimit(req, corsHeaders);
@@ -92,10 +92,7 @@ export default async function handler(req) {
   const feedUrl = requestUrl.searchParams.get('url');
 
   if (!feedUrl) {
-    return new Response(JSON.stringify({ error: 'Missing url parameter' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders },
-    });
+    return jsonResponse({ error: 'Missing url parameter' }, 400, corsHeaders);
   }
 
   try {
@@ -104,16 +101,13 @@ export default async function handler(req) {
     // Security: Check if domain is allowed (normalize www prefix)
     const hostname = parsedUrl.hostname;
     if (!isAllowedDomain(hostname)) {
-      return new Response(JSON.stringify({ error: 'Domain not allowed' }), {
-        status: 403,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
-      });
+      return jsonResponse({ error: 'Domain not allowed' }, 403, corsHeaders);
     }
 
     const isRelayOnly = RELAY_ONLY_DOMAINS.has(hostname);
 
     // Google News is slow - use longer timeout
-    const isGoogleNews = feedUrl.includes('news.google.com');
+    const isGoogleNews = isGoogleNewsFeedUrl(feedUrl);
     const timeout = isGoogleNews ? 20000 : 12000;
 
     const fetchDirect = async () => {
@@ -188,13 +182,10 @@ export default async function handler(req) {
   } catch (error) {
     const isTimeout = error.name === 'AbortError';
     console.error('RSS proxy error:', feedUrl, error.message);
-    return new Response(JSON.stringify({
+    return jsonResponse({
       error: isTimeout ? 'Feed timeout' : 'Failed to fetch feed',
       details: error.message,
       url: feedUrl
-    }), {
-      status: isTimeout ? 504 : 502,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders },
-    });
+    }, isTimeout ? 504 : 502, corsHeaders);
   }
 }

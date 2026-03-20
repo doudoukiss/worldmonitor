@@ -1,5 +1,11 @@
 import type { AppContext, AppModule } from '@/app/app-context';
 import type { AirlineIntelPanel } from '@/components/AirlineIntelPanel';
+import type { CustomWidgetPanel } from '@/components/CustomWidgetPanel';
+import { openWidgetChatModal } from '@/components/WidgetChatModal';
+import { deleteWidget, getWidget, saveWidget } from '@/services/widget-store';
+import type { McpDataPanel } from '@/components/McpDataPanel';
+import { openMcpConnectModal } from '@/components/McpConnectModal';
+import { deleteMcpPanel, getMcpPanel, saveMcpPanel } from '@/services/mcp-store';
 import type { PanelConfig, MapLayers } from '@/types';
 import type { MapView } from '@/components';
 import type { ClusteredEvent } from '@/types';
@@ -27,7 +33,6 @@ import {
   LAYER_TO_SOURCE,
   FEEDS,
   INTEL_SOURCES,
-  DEFAULT_PANELS,
 } from '@/config';
 import { VARIANT_META } from '@/config/variant-meta';
 import { isDesktopRuntime } from '@/services/runtime';
@@ -88,6 +93,7 @@ export class EventHandlerManager implements AppModule {
   private boundMapFullscreenEscHandler: ((e: KeyboardEvent) => void) | null = null;
   private boundMobileMenuKeyHandler: ((e: KeyboardEvent) => void) | null = null;
   private boundPanelCloseHandler: ((e: Event) => void) | null = null;
+  private boundWidgetModifyHandler: ((e: Event) => void) | null = null;
   private boundUndoHandler: ((e: KeyboardEvent) => void) | null = null;
   private closedPanelStack: string[] = []; // max-items: 20
   private idleTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -161,7 +167,7 @@ export class EventHandlerManager implements AppModule {
   }
 
   private toggleTvMode(): void {
-    const panelKeys = Object.keys(DEFAULT_PANELS).filter(
+    const panelKeys = Object.keys(this.ctx.panelSettings).filter(
       key => this.ctx.panelSettings[key]?.enabled !== false
     );
     if (!this.ctx.tvMode) {
@@ -264,6 +270,10 @@ export class EventHandlerManager implements AppModule {
       this.ctx.container.removeEventListener('wm:panel-close', this.boundPanelCloseHandler);
       this.boundPanelCloseHandler = null;
     }
+    if (this.boundWidgetModifyHandler) {
+      this.ctx.container.removeEventListener('wm:widget-modify', this.boundWidgetModifyHandler);
+      this.boundWidgetModifyHandler = null;
+    }
     if (this.boundUndoHandler) {
       document.removeEventListener('keydown', this.boundUndoHandler);
       this.boundUndoHandler = null;
@@ -318,6 +328,31 @@ export class EventHandlerManager implements AppModule {
     // Handle panel close (X) button clicks
     this.boundPanelCloseHandler = ((e: CustomEvent<{ panelId: string }>) => {
       const { panelId } = e.detail;
+
+      if (panelId.startsWith('cw-')) {
+        if (!window.confirm(t('widgets.confirmDelete'))) return;
+        deleteWidget(panelId);
+        const panel = this.ctx.panels[panelId];
+        panel?.destroy();
+        delete this.ctx.panels[panelId];
+        delete this.ctx.panelSettings[panelId];
+        saveToStorage(STORAGE_KEYS.panels, this.ctx.panelSettings);
+        panel?.getElement()?.remove();
+        return;
+      }
+
+      if (panelId.startsWith('mcp-')) {
+        if (!window.confirm(t('mcp.confirmDelete'))) return;
+        deleteMcpPanel(panelId);
+        const panel = this.ctx.panels[panelId];
+        panel?.destroy();
+        delete this.ctx.panels[panelId];
+        delete this.ctx.panelSettings[panelId];
+        saveToStorage(STORAGE_KEYS.panels, this.ctx.panelSettings);
+        panel?.getElement()?.remove();
+        return;
+      }
+
       const config = this.ctx.panelSettings[panelId];
       if (!config) return;
       config.enabled = false;
@@ -330,6 +365,32 @@ export class EventHandlerManager implements AppModule {
       if (this.closedPanelStack.length > 20) this.closedPanelStack.shift();
     }) as EventListener;
     this.ctx.container.addEventListener('wm:panel-close', this.boundPanelCloseHandler);
+
+    this.boundWidgetModifyHandler = ((e: CustomEvent<{ widgetId: string }>) => {
+      const spec = getWidget(e.detail.widgetId);
+      if (!spec) return;
+      openWidgetChatModal({
+        mode: 'modify',
+        existingSpec: spec,
+        onComplete: (updated) => {
+          saveWidget(updated);
+          (this.ctx.panels[updated.id] as CustomWidgetPanel | undefined)?.updateSpec(updated);
+        },
+      });
+    }) as EventListener;
+    this.ctx.container.addEventListener('wm:widget-modify', this.boundWidgetModifyHandler);
+
+    this.ctx.container.addEventListener('wm:mcp-configure', ((e: CustomEvent<{ panelId: string }>) => {
+      const spec = getMcpPanel(e.detail.panelId);
+      if (!spec) return;
+      openMcpConnectModal({
+        existingSpec: spec,
+        onComplete: (updated) => {
+          saveMcpPanel(updated);
+          (this.ctx.panels[updated.id] as McpDataPanel | undefined)?.updateSpec(updated);
+        },
+      });
+    }) as EventListener);
 
     // undo via Ctrl/Cmd+Z
     this.boundUndoHandler = (e: KeyboardEvent) => {
@@ -770,7 +831,14 @@ export class EventHandlerManager implements AppModule {
     }
 
     const target = options.href || VARIANT_META[variant]?.url;
-    if (target) window.location.href = target;
+    if (!target) return;
+    try {
+      const parsed = new URL(target, window.location.href);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
+      window.location.href = parsed.toString();
+    } catch {
+      return;
+    }
   }
 
   toggleFullscreen(): void {
@@ -817,7 +885,7 @@ export class EventHandlerManager implements AppModule {
   }
 
   setupPizzIntIndicator(): void {
-    if (SITE_VARIANT === 'tech' || SITE_VARIANT === 'finance' || SITE_VARIANT === 'happy') return;
+    if (SITE_VARIANT !== 'full') return;
 
     this.ctx.pizzintIndicator = new PizzIntIndicator();
     const headerLeft = this.ctx.container.querySelector('.header-left');

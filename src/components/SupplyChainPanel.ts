@@ -10,7 +10,7 @@ import { escapeHtml } from '@/utils/sanitize';
 import { isFeatureAvailable } from '@/services/runtime-config';
 import { isDesktopRuntime } from '@/services/runtime';
 
-type TabId = 'chokepoints' | 'shipping' | 'minerals';
+type TabId = 'chokepoints' | 'shipping' | 'indicators' | 'minerals';
 
 export class SupplyChainPanel extends Panel {
   private shippingData: GetShippingRatesResponse | null = null;
@@ -77,6 +77,9 @@ export class SupplyChainPanel extends Panel {
         <button class="panel-tab ${this.activeTab === 'shipping' ? 'active' : ''}" data-tab="shipping">
           ${t('components.supplyChain.shipping')}
         </button>
+        <button class="panel-tab ${this.activeTab === 'indicators' ? 'active' : ''}" data-tab="indicators">
+          ${t('components.supplyChain.economicIndicators')}
+        </button>
         <button class="panel-tab ${this.activeTab === 'minerals' ? 'active' : ''}" data-tab="minerals">
           ${t('components.supplyChain.minerals')}
         </button>
@@ -87,9 +90,11 @@ export class SupplyChainPanel extends Panel {
       ? (this.chokepointData?.chokepoints?.length ?? 0) > 0
       : this.activeTab === 'shipping'
         ? (this.shippingData?.indices?.length ?? 0) > 0 || this.chokepointData !== null
-        : (this.mineralsData?.minerals?.length ?? 0) > 0;
+        : this.activeTab === 'indicators'
+          ? (this.shippingData?.indices?.length ?? 0) > 0
+          : (this.mineralsData?.minerals?.length ?? 0) > 0;
     const activeData = this.activeTab === 'chokepoints' ? this.chokepointData
-      : this.activeTab === 'shipping' ? this.shippingData
+      : (this.activeTab === 'shipping' || this.activeTab === 'indicators') ? this.shippingData
       : this.mineralsData;
     const unavailableBanner = !activeHasData && activeData?.upstreamUnavailable
       ? `<div class="economic-warning">${t('components.supplyChain.upstreamUnavailable')}</div>`
@@ -99,6 +104,7 @@ export class SupplyChainPanel extends Panel {
     switch (this.activeTab) {
       case 'chokepoints': contentHtml = this.renderChokepoints(); break;
       case 'shipping': contentHtml = this.renderShipping(); break;
+      case 'indicators': contentHtml = this.renderIndicators(); break;
       case 'minerals': contentHtml = this.renderMinerals(); break;
     }
 
@@ -258,43 +264,97 @@ export class SupplyChainPanel extends Panel {
   private renderFredIndices(): string {
     if (isDesktopRuntime() && !isFeatureAvailable('supplyChain')) return '';
     if (!this.shippingData?.indices?.length) return '';
+    const container = new Set(['SCFI', 'CCFI']);
+    const bulk = new Set(['BDI', 'BCI', 'BPI', 'BSI', 'BHSI']);
 
-    return this.shippingData.indices.map(idx => {
+    const containerIndices = this.shippingData.indices.filter(i => container.has(i.indexId));
+    const bulkIndices = this.shippingData.indices.filter(i => bulk.has(i.indexId));
+
+    const renderGroup = (label: string, indices: typeof this.shippingData.indices): string => {
+      if (!indices.length) return '';
+      const cards = indices.map(idx => {
+        const changeClass = idx.changePct >= 0 ? 'change-positive' : 'change-negative';
+        const changeArrow = idx.changePct >= 0 ? '\u25B2' : '\u25BC';
+        const sparkline = this.renderSparkline(idx.history.map(h => h.value), idx.history.map(h => h.date));
+        const spikeBanner = idx.spikeAlert
+          ? `<div class="economic-warning">${t('components.supplyChain.spikeAlert')}</div>`
+          : '';
+        return `<div class="trade-restriction-card">
+          ${spikeBanner}
+          <div class="trade-restriction-header">
+            <span class="trade-country">${escapeHtml(idx.name)}</span>
+            <span class="trade-badge">${idx.currentValue.toFixed(0)} ${escapeHtml(idx.unit)}</span>
+            <span class="trade-flow-change ${changeClass}">${changeArrow} ${Math.abs(idx.changePct).toFixed(1)}%</span>
+          </div>
+          <div class="trade-restriction-body">
+            ${sparkline}
+          </div>
+        </div>`;
+      }).join('');
+      return `<div class="trade-sector" style="font-weight:600;margin:8px 0 4px">${escapeHtml(label)}</div>${cards}`;
+    };
+
+    return [
+      renderGroup(t('components.supplyChain.containerRates'), containerIndices),
+      renderGroup(t('components.supplyChain.bulkShipping'), bulkIndices),
+    ].join('');
+  }
+
+  private renderIndicators(): string {
+    if (isDesktopRuntime() && !isFeatureAvailable('supplyChain')) return '';
+    if (!this.shippingData?.indices?.length) {
+      return `<div class="economic-empty">${t('components.supplyChain.noShipping')}</div>`;
+    }
+    const container = new Set(['SCFI', 'CCFI']);
+    const bulk = new Set(['BDI', 'BCI', 'BPI', 'BSI', 'BHSI']);
+    const econIndices = this.shippingData.indices.filter(i => !container.has(i.indexId) && !bulk.has(i.indexId));
+    if (!econIndices.length) {
+      return `<div class="economic-empty">${t('components.supplyChain.noShipping')}</div>`;
+    }
+    const cards = econIndices.map(idx => {
       const changeClass = idx.changePct >= 0 ? 'change-positive' : 'change-negative';
       const changeArrow = idx.changePct >= 0 ? '\u25B2' : '\u25BC';
-      const sparkline = this.renderSparkline(idx.history.map(h => h.value));
+      const sparkline = this.renderSparkline(idx.history.map(h => h.value), idx.history.map(h => h.date));
       const spikeBanner = idx.spikeAlert
         ? `<div class="economic-warning">${t('components.supplyChain.spikeAlert')}</div>`
         : '';
       return `<div class="trade-restriction-card">
-        ${spikeBanner}
-        <div class="trade-restriction-header">
-          <span class="trade-country">${escapeHtml(idx.name)}</span>
-          <span class="trade-badge">${idx.currentValue.toFixed(0)} ${escapeHtml(idx.unit)}</span>
-          <span class="trade-flow-change ${changeClass}">${changeArrow} ${Math.abs(idx.changePct).toFixed(1)}%</span>
-        </div>
-        <div class="trade-restriction-body">
-          ${sparkline}
-        </div>
-      </div>`;
+          ${spikeBanner}
+          <div class="trade-restriction-header">
+            <span class="trade-country">${escapeHtml(idx.name)}</span>
+            <span class="trade-badge">${idx.currentValue.toFixed(0)} ${escapeHtml(idx.unit)}</span>
+            <span class="trade-flow-change ${changeClass}">${changeArrow} ${Math.abs(idx.changePct).toFixed(1)}%</span>
+          </div>
+          <div class="trade-restriction-body">
+            ${sparkline}
+          </div>
+        </div>`;
     }).join('');
+    return `<div class="trade-restrictions-list">${cards}</div>`;
   }
 
-  private renderSparkline(values: number[]): string {
+  private renderSparkline(values: number[], dates?: string[]): string {
     if (values.length < 2) return '';
     const min = Math.min(...values);
     const max = Math.max(...values);
     const range = max - min || 1;
     const w = 200;
     const h = 40;
+    const totalH = dates?.length ? h + 14 : h;
     const points = values.map((v, i) => {
       const x = (i / (values.length - 1)) * w;
-      const y = h - ((v - min) / range) * h;
+      const y = h - ((v - min) / range) * (h - 4) - 2;
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     }).join(' ');
 
-    return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block;margin:4px 0">
+    const dateLabels = dates?.length ? `
+      <text x="0" y="${totalH - 1}" fill="var(--text-dim,#888)" font-size="9" text-anchor="start">${escapeHtml(dates[0]!.slice(0, 7))}</text>
+      <text x="${w}" y="${totalH - 1}" fill="var(--text-dim,#888)" font-size="9" text-anchor="end">${escapeHtml(dates[dates.length - 1]!.slice(0, 7))}</text>
+    ` : '';
+
+    return `<svg width="${w}" height="${totalH}" viewBox="0 0 ${w} ${totalH}" style="display:block;margin:4px 0">
       <polyline points="${points}" fill="none" stroke="var(--accent-primary, #4fc3f7)" stroke-width="1.5" />
+      ${dateLabels}
     </svg>`;
   }
 

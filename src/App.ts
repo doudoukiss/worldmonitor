@@ -7,6 +7,9 @@ import {
   MOBILE_DEFAULT_MAP_LAYERS,
   STORAGE_KEYS,
   SITE_VARIANT,
+  ALL_PANELS,
+  VARIANT_DEFAULTS,
+  getEffectivePanelConfig,
 } from '@/config';
 import { sanitizeLayersForVariant } from '@/config/map-layer-definitions';
 import type { MapVariant } from '@/config/map-layer-definitions';
@@ -91,6 +94,19 @@ export class App {
     return panelIds.some((panelId) => this.isPanelNearViewport(panelId, marginPx));
   }
 
+  private shouldRefreshIntelligence(): boolean {
+    return this.isAnyPanelNearViewport(['cii', 'strategic-risk', 'strategic-posture'])
+      || !!this.state.countryBriefPage?.isVisible();
+  }
+
+  private shouldRefreshFirms(): boolean {
+    return this.isPanelNearViewport('satellite-fires');
+  }
+
+  private shouldRefreshCorrelation(): boolean {
+    return this.isAnyPanelNearViewport(['military-correlation', 'escalation-correlation', 'economic-correlation', 'disaster-correlation']);
+  }
+
   private async primeVisiblePanelData(forceAll = false): Promise<void> {
     const tasks: Promise<unknown>[] = [];
     const primeTask = (key: string, task: () => Promise<unknown>): void => {
@@ -133,7 +149,7 @@ export class App {
       const panel = this.state.panels['gulf-economies'] as GulfEconomiesPanel | undefined;
       if (panel) primeTask('gulf-economies', () => panel.fetchData());
     }
-    if (shouldPrimeAny(['markets', 'heatmap', 'commodities', 'crypto'])) {
+    if (shouldPrimeAny(['markets', 'heatmap', 'commodities', 'crypto', 'energy-complex'])) {
       primeTask('markets', () => this.dataLoader.loadMarkets());
     }
     if (shouldPrime('polymarket')) {
@@ -141,9 +157,11 @@ export class App {
     }
     if (shouldPrime('economic')) {
       primeTask('fred', () => this.dataLoader.loadFredData());
-      primeTask('oil', () => this.dataLoader.loadOilAnalytics());
       primeTask('spending', () => this.dataLoader.loadGovernmentSpending());
       primeTask('bis', () => this.dataLoader.loadBisData());
+    }
+    if (shouldPrime('energy-complex')) {
+      primeTask('oil', () => this.dataLoader.loadOilAnalytics());
     }
     if (shouldPrime('trade-policy')) {
       primeTask('tradePolicy', () => this.dataLoader.loadTradePolicy());
@@ -151,7 +169,7 @@ export class App {
     if (shouldPrime('supply-chain')) {
       primeTask('supplyChain', () => this.dataLoader.loadSupplyChain());
     }
-    if (SITE_VARIANT === 'finance' && getSecretState('WORLDMONITOR_API_KEY').present) {
+    if (getSecretState('WORLDMONITOR_API_KEY').present) {
       if (shouldPrime('stock-analysis')) {
         primeTask('stockAnalysis', () => this.dataLoader.loadStockAnalysis());
       }
@@ -190,17 +208,19 @@ export class App {
     const currentVariant = SITE_VARIANT;
     console.log(`[App] Variant check: stored="${storedVariant}", current="${currentVariant}"`);
     if (storedVariant !== currentVariant) {
-      // Variant changed - use defaults for new variant, clear old settings
-      console.log('[App] Variant changed - resetting to defaults');
+      // Variant changed — seed new variant's panels but preserve existing user choices
+      console.log('[App] Variant changed - seeding new defaults, preserving user choices');
       localStorage.setItem('worldmonitor-variant', currentVariant);
+      // Reset map layers for the new variant (map layers are not user-personalized the same way)
       localStorage.removeItem(STORAGE_KEYS.mapLayers);
-      localStorage.removeItem(STORAGE_KEYS.panels);
-      localStorage.removeItem(PANEL_ORDER_KEY);
-      localStorage.removeItem(PANEL_ORDER_KEY + '-bottom');
-      localStorage.removeItem(PANEL_ORDER_KEY + '-bottom-set');
-      localStorage.removeItem(PANEL_SPANS_KEY);
       mapLayers = sanitizeLayersForVariant({ ...defaultLayers }, currentVariant as MapVariant);
-      panelSettings = { ...DEFAULT_PANELS };
+      // Load existing panel prefs (if any) and seed new variant's panels
+      panelSettings = loadFromStorage<Record<string, PanelConfig>>(STORAGE_KEYS.panels, {});
+      for (const key of (VARIANT_DEFAULTS[currentVariant] ?? [])) {
+        if (!(key in panelSettings)) {
+          panelSettings[key] = { ...getEffectivePanelConfig(key, currentVariant), enabled: true };
+        }
+      }
     } else {
       mapLayers = sanitizeLayersForVariant(
         loadFromStorage<MapLayers>(STORAGE_KEYS.mapLayers, defaultLayers),
@@ -233,11 +253,25 @@ export class App {
         localStorage.setItem(PANEL_KEY_RENAMES_MIGRATION_KEY, 'done');
       }
 
-      // Merge in any new panels that didn't exist when settings were saved
-      for (const [key, config] of Object.entries(DEFAULT_PANELS)) {
+      // Merge in any panels from ALL_PANELS that didn't exist when settings were saved
+      for (const key of Object.keys(ALL_PANELS)) {
         if (!(key in panelSettings)) {
-          panelSettings[key] = { ...config };
+          const isDefault = (VARIANT_DEFAULTS[SITE_VARIANT] ?? []).includes(key);
+          panelSettings[key] = { ...getEffectivePanelConfig(key, SITE_VARIANT), enabled: isDefault };
         }
+      }
+
+      // One-time migration: expose all panels to existing users (previously variant-gated)
+      const UNIFIED_MIGRATION_KEY = 'worldmonitor-unified-panels-v1';
+      if (!localStorage.getItem(UNIFIED_MIGRATION_KEY)) {
+        const variantDefaults = new Set(VARIANT_DEFAULTS[SITE_VARIANT] ?? []);
+        for (const key of Object.keys(ALL_PANELS)) {
+          if (!(key in panelSettings)) {
+            panelSettings[key] = { ...getEffectivePanelConfig(key, SITE_VARIANT), enabled: variantDefaults.has(key) };
+          }
+        }
+        saveToStorage(STORAGE_KEYS.panels, panelSettings);
+        localStorage.setItem(UNIFIED_MIGRATION_KEY, 'done');
       }
       console.log('[App] Loaded panel settings from storage:', Object.entries(panelSettings).filter(([_, v]) => !v.enabled).map(([k]) => k));
 
@@ -290,7 +324,7 @@ export class App {
     // One-time migration: prune removed panel keys from stored settings and order
     const PANEL_PRUNE_KEY = 'worldmonitor-panel-prune-v1';
     if (!localStorage.getItem(PANEL_PRUNE_KEY)) {
-      const validKeys = new Set(Object.keys(DEFAULT_PANELS));
+      const validKeys = new Set(Object.keys(ALL_PANELS));
       let pruned = false;
       for (const key of Object.keys(panelSettings)) {
         if (!validKeys.has(key) && key !== 'runtime-config') {
@@ -748,7 +782,7 @@ export class App {
           name: 'markets',
           fn: () => this.dataLoader.loadMarkets(),
           intervalMs: REFRESH_INTERVALS.markets,
-          condition: () => this.isAnyPanelNearViewport(['markets', 'heatmap', 'commodities', 'crypto']),
+          condition: () => this.isAnyPanelNearViewport(['markets', 'heatmap', 'commodities', 'crypto', 'crypto-heatmap', 'defi-tokens', 'ai-tokens', 'other-tokens']),
         },
         {
           name: 'predictions',
@@ -762,23 +796,23 @@ export class App {
           intervalMs: REFRESH_INTERVALS.forecasts,
           condition: () => this.isPanelNearViewport('forecast'),
         },
-        { name: 'pizzint', fn: () => this.dataLoader.loadPizzInt(), intervalMs: 10 * 60 * 1000 },
-        { name: 'natural', fn: () => this.dataLoader.loadNatural(), intervalMs: 60 * 60 * 1000, condition: () => this.state.mapLayers.natural },
-        { name: 'weather', fn: () => this.dataLoader.loadWeatherAlerts(), intervalMs: 10 * 60 * 1000, condition: () => this.state.mapLayers.weather },
-        { name: 'fred', fn: () => this.dataLoader.loadFredData(), intervalMs: 6 * 60 * 60 * 1000, condition: () => this.isPanelNearViewport('economic') },
-        { name: 'oil', fn: () => this.dataLoader.loadOilAnalytics(), intervalMs: 6 * 60 * 60 * 1000, condition: () => this.isPanelNearViewport('economic') },
-        { name: 'spending', fn: () => this.dataLoader.loadGovernmentSpending(), intervalMs: 6 * 60 * 60 * 1000, condition: () => this.isPanelNearViewport('economic') },
-        { name: 'bis', fn: () => this.dataLoader.loadBisData(), intervalMs: 6 * 60 * 60 * 1000, condition: () => this.isPanelNearViewport('economic') },
-        { name: 'firms', fn: () => this.dataLoader.loadFirmsData(), intervalMs: 30 * 60 * 1000 },
+        { name: 'pizzint', fn: () => this.dataLoader.loadPizzInt(), intervalMs: REFRESH_INTERVALS.pizzint, condition: () => SITE_VARIANT === 'full' },
+        { name: 'natural', fn: () => this.dataLoader.loadNatural(), intervalMs: REFRESH_INTERVALS.natural, condition: () => this.state.mapLayers.natural },
+        { name: 'weather', fn: () => this.dataLoader.loadWeatherAlerts(), intervalMs: REFRESH_INTERVALS.weather, condition: () => this.state.mapLayers.weather },
+        { name: 'fred', fn: () => this.dataLoader.loadFredData(), intervalMs: REFRESH_INTERVALS.fred, condition: () => this.isPanelNearViewport('economic') },
+        { name: 'spending', fn: () => this.dataLoader.loadGovernmentSpending(), intervalMs: REFRESH_INTERVALS.spending, condition: () => this.isPanelNearViewport('economic') },
+        { name: 'bis', fn: () => this.dataLoader.loadBisData(), intervalMs: REFRESH_INTERVALS.bis, condition: () => this.isPanelNearViewport('economic') },
+        { name: 'oil', fn: () => this.dataLoader.loadOilAnalytics(), intervalMs: REFRESH_INTERVALS.oil, condition: () => this.isPanelNearViewport('energy-complex') },
+        { name: 'firms', fn: () => this.dataLoader.loadFirmsData(), intervalMs: REFRESH_INTERVALS.firms, condition: () => this.shouldRefreshFirms() },
         { name: 'ais', fn: () => this.dataLoader.loadAisSignals(), intervalMs: REFRESH_INTERVALS.ais, condition: () => this.state.mapLayers.ais },
-        { name: 'cables', fn: () => this.dataLoader.loadCableActivity(), intervalMs: 30 * 60 * 1000, condition: () => this.state.mapLayers.cables },
-        { name: 'cableHealth', fn: () => this.dataLoader.loadCableHealth(), intervalMs: 2 * 60 * 60 * 1000, condition: () => this.state.mapLayers.cables },
-        { name: 'flights', fn: () => this.dataLoader.loadFlightDelays(), intervalMs: 2 * 60 * 60 * 1000, condition: () => this.state.mapLayers.flights },
+        { name: 'cables', fn: () => this.dataLoader.loadCableActivity(), intervalMs: REFRESH_INTERVALS.cables, condition: () => this.state.mapLayers.cables },
+        { name: 'cableHealth', fn: () => this.dataLoader.loadCableHealth(), intervalMs: REFRESH_INTERVALS.cableHealth, condition: () => this.state.mapLayers.cables },
+        { name: 'flights', fn: () => this.dataLoader.loadFlightDelays(), intervalMs: REFRESH_INTERVALS.flights, condition: () => this.state.mapLayers.flights },
         {
           name: 'cyberThreats', fn: () => {
             this.state.cyberThreatsCache = null;
             return this.dataLoader.loadCyberThreats();
-          }, intervalMs: 10 * 60 * 1000, condition: () => CYBER_LAYER_ENABLED && this.state.mapLayers.cyberThreats
+          }, intervalMs: REFRESH_INTERVALS.cyberThreats, condition: () => CYBER_LAYER_ENABLED && this.state.mapLayers.cyberThreats
         },
       ]);
     }
@@ -787,19 +821,19 @@ export class App {
       this.refreshScheduler.scheduleRefresh(
         'stock-analysis',
         () => this.dataLoader.loadStockAnalysis(),
-        15 * 60 * 1000,
+        REFRESH_INTERVALS.stockAnalysis,
         () => getSecretState('WORLDMONITOR_API_KEY').present && this.isPanelNearViewport('stock-analysis'),
       );
       this.refreshScheduler.scheduleRefresh(
         'daily-market-brief',
         () => this.dataLoader.loadDailyMarketBrief(),
-        60 * 60 * 1000,
+        REFRESH_INTERVALS.dailyMarketBrief,
         () => getSecretState('WORLDMONITOR_API_KEY').present && this.isPanelNearViewport('daily-market-brief'),
       );
       this.refreshScheduler.scheduleRefresh(
         'stock-backtest',
         () => this.dataLoader.loadStockBacktest(),
-        4 * 60 * 60 * 1000,
+        REFRESH_INTERVALS.stockBacktest,
         () => getSecretState('WORLDMONITOR_API_KEY').present && this.isPanelNearViewport('stock-backtest'),
       );
     }
@@ -808,63 +842,63 @@ export class App {
     this.refreshScheduler.scheduleRefresh(
       'service-status',
       () => (this.state.panels['service-status'] as ServiceStatusPanel).fetchStatus(),
-      3 * 60_000,
+      REFRESH_INTERVALS.serviceStatus,
       () => this.isPanelNearViewport('service-status')
     );
     this.refreshScheduler.scheduleRefresh(
       'stablecoins',
       () => (this.state.panels.stablecoins as StablecoinPanel).fetchData(),
-      15 * 60_000,
+      REFRESH_INTERVALS.stablecoins,
       () => this.isPanelNearViewport('stablecoins')
     );
     this.refreshScheduler.scheduleRefresh(
       'etf-flows',
       () => (this.state.panels['etf-flows'] as ETFFlowsPanel).fetchData(),
-      15 * 60_000,
+      REFRESH_INTERVALS.etfFlows,
       () => this.isPanelNearViewport('etf-flows')
     );
     this.refreshScheduler.scheduleRefresh(
       'macro-signals',
       () => (this.state.panels['macro-signals'] as MacroSignalsPanel).fetchData(),
-      15 * 60_000,
+      REFRESH_INTERVALS.macroSignals,
       () => this.isPanelNearViewport('macro-signals')
     );
     this.refreshScheduler.scheduleRefresh(
       'strategic-posture',
       () => (this.state.panels['strategic-posture'] as StrategicPosturePanel).refresh(),
-      15 * 60_000,
-      () => !!this.state.panels['strategic-posture']
+      REFRESH_INTERVALS.strategicPosture,
+      () => this.isPanelNearViewport('strategic-posture')
     );
     this.refreshScheduler.scheduleRefresh(
       'strategic-risk',
       () => (this.state.panels['strategic-risk'] as StrategicRiskPanel).refresh(),
-      5 * 60_000,
-      () => !!this.state.panels['strategic-risk']
+      REFRESH_INTERVALS.strategicRisk,
+      () => this.isPanelNearViewport('strategic-risk')
     );
 
     // Server-side temporal anomalies (news + satellite_fires)
     if (SITE_VARIANT !== 'happy') {
-      this.refreshScheduler.scheduleRefresh('temporalBaseline', () => this.dataLoader.refreshTemporalBaseline(), 600_000);
+      this.refreshScheduler.scheduleRefresh('temporalBaseline', () => this.dataLoader.refreshTemporalBaseline(), REFRESH_INTERVALS.temporalBaseline, () => this.shouldRefreshIntelligence());
     }
 
     // WTO trade policy data — annual data, poll every 10 min to avoid hammering upstream
     if (SITE_VARIANT === 'full' || SITE_VARIANT === 'finance' || SITE_VARIANT === 'commodity') {
-      this.refreshScheduler.scheduleRefresh('tradePolicy', () => this.dataLoader.loadTradePolicy(), 60 * 60 * 1000, () => this.isPanelNearViewport('trade-policy'));
-      this.refreshScheduler.scheduleRefresh('supplyChain', () => this.dataLoader.loadSupplyChain(), 60 * 60 * 1000, () => this.isPanelNearViewport('supply-chain'));
+      this.refreshScheduler.scheduleRefresh('tradePolicy', () => this.dataLoader.loadTradePolicy(), REFRESH_INTERVALS.tradePolicy, () => this.isPanelNearViewport('trade-policy'));
+      this.refreshScheduler.scheduleRefresh('supplyChain', () => this.dataLoader.loadSupplyChain(), REFRESH_INTERVALS.supplyChain, () => this.isPanelNearViewport('supply-chain'));
     }
 
     // Telegram Intel (near real-time, 60s refresh)
     this.refreshScheduler.scheduleRefresh(
       'telegram-intel',
       () => this.dataLoader.loadTelegramIntel(),
-      60 * 1_000,
+      REFRESH_INTERVALS.telegramIntel,
       () => this.isPanelNearViewport('telegram-intel')
     );
 
     this.refreshScheduler.scheduleRefresh(
       'gulf-economies',
       () => (this.state.panels['gulf-economies'] as GulfEconomiesPanel).fetchData(),
-      10 * 60_000,
+      REFRESH_INTERVALS.gulfEconomies,
       () => this.isPanelNearViewport('gulf-economies')
     );
 
@@ -876,7 +910,7 @@ export class App {
         if (military) this.state.intelligenceCache.military = military;
         if (iranEvents) this.state.intelligenceCache.iranEvents = iranEvents;
         return this.dataLoader.loadIntelligenceSignals();
-      }, 15 * 60 * 1000);
+      }, REFRESH_INTERVALS.intelligence, () => this.shouldRefreshIntelligence());
     }
 
     // Correlation engine refresh
@@ -891,7 +925,8 @@ export class App {
           panel?.updateCards(engine.getCards(domain));
         }
       },
-      5 * 60 * 1000,
+      REFRESH_INTERVALS.correlationEngine,
+      () => this.shouldRefreshCorrelation(),
     );
   }
 }
