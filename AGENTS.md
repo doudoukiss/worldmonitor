@@ -1,198 +1,269 @@
 # AGENTS.md
 
-Agent entry point for WorldMonitor. Read this first, then follow links for depth.
+Current agent entry point for WorldMonitor. Read this before making changes.
 
-## What This Project Is
+## What This Repo Is
 
-Real-time global intelligence dashboard. TypeScript SPA (Vite + Preact) with 86 panel components, 60+ Vercel Edge API endpoints, a Tauri desktop app with Node.js sidecar, and a Railway relay service. Aggregates 30+ external data sources (geopolitics, military, finance, climate, cyber, maritime, aviation).
+WorldMonitor is a large local-first global intelligence dashboard with:
+
+- a browser SPA in `src/`
+- typed proto-first server handlers in `server/`
+- legacy and typed API entry points in `api/`
+- a Tauri desktop shell in `src-tauri/`
+- seed and relay scripts in `scripts/`
+- a growing local-first personal companion layered into the existing UI
+
+The repo is broad, but the current checkout is being used primarily as a local
+Mac app and as a reference point for a narrower future trading-focused system.
+
+## Current Local Status
+
+As of 2026-03-21 in this checkout:
+
+- the main dev app runs locally on `http://localhost:3000`
+- `.env.local` exists and is active for local development
+- local Ollama is configured via:
+  - `OLLAMA_API_URL=http://127.0.0.1:11434`
+  - `OLLAMA_MODEL=qwen2.5:7b`
+- `EIA_API_KEY` is configured in `.env.local`
+- `FINNHUB_API_KEY` is configured in `.env.local`
+- `keys.txt` is reference-only and is not read directly by the app
+- Telegram bot credentials in `keys.txt` do not activate the repo's current
+  Telegram intel ingestion path
+- Convex sync remains optional and is not required for the local companion
+
+Do not assume all upstream data sources are active just because code exists for
+them. Many still depend on relay jobs, seeds, premium credentials, or optional
+cloud wiring.
 
 ## Repository Map
 
-```
+```text
 .
-├── src/                    # Browser SPA (TypeScript, class-based components)
-│   ├── app/                # App orchestration (data-loader, refresh-scheduler, panel-layout)
-│   ├── components/         # 86 UI panels + map components (Panel subclasses)
-│   ├── config/             # Variant configs, panel/layer definitions, market symbols
-│   ├── services/           # Business logic (120+ service files, organized by domain)
-│   ├── types/              # TypeScript type definitions
-│   ├── utils/              # Shared utilities (circuit-breaker, theme, URL state, DOM)
-│   ├── workers/            # Web Workers (analysis, ML/ONNX, vector DB)
-│   ├── generated/          # Proto-generated client/server stubs (DO NOT EDIT)
-│   ├── locales/            # i18n translation files
-│   └── App.ts              # Main application entry
-├── api/                    # Vercel Edge Functions (plain JS, self-contained)
-│   ├── _*.js               # Shared helpers (CORS, rate-limit, API key, relay)
-│   ├── health.js           # Health check endpoint
-│   ├── bootstrap.js        # Bulk data hydration endpoint
-│   └── <domain>/           # Domain-specific endpoints (aviation/, climate/, etc.)
-├── server/                 # Server-side shared code (used by Edge Functions)
-│   ├── _shared/            # Redis, rate-limit, LLM, caching, response headers
-│   ├── gateway.ts          # Domain gateway factory (CORS, auth, cache tiers)
-│   ├── router.ts           # Route matching
-│   └── worldmonitor/       # Domain handlers (mirrors proto service structure)
-├── proto/                  # Protobuf definitions (sebuf framework)
-│   ├── buf.yaml            # Buf configuration
-│   └── worldmonitor/       # Service definitions with HTTP annotations
-├── shared/                 # Cross-platform data (JSON configs for markets, RSS domains)
-├── scripts/                # Seed scripts, build helpers, data fetchers
-├── src-tauri/              # Tauri desktop shell (Rust + Node.js sidecar)
-│   └── sidecar/            # Node.js sidecar API server
-├── tests/                  # Unit/integration tests (node:test runner)
-├── e2e/                    # Playwright E2E specs
-├── docs/                   # Mintlify documentation site
-├── docker/                 # Docker build for Railway services
-├── deploy/                 # Deployment configs
-└── blog-site/              # Static blog (built into public/blog/)
+├── src/                    # Browser SPA, still mostly class-based
+│   ├── app/                # Runtime orchestration, panel layout, search, events
+│   ├── components/         # Panels, maps, modals, companion UI
+│   ├── config/             # Panels, variants, layers, markets, feeds
+│   ├── services/           # Business logic, fetchers, stores, adapters
+│   ├── types/              # Shared TS types
+│   ├── utils/              # Browser/runtime helpers
+│   ├── workers/            # Web workers
+│   ├── generated/          # Proto-generated code, do not hand-edit
+│   └── App.ts              # Main app shell
+├── api/                    # Edge entry points, mostly plain JS or thin RPC files
+├── server/                 # Typed server handlers and gateway logic
+├── proto/                  # Proto contracts
+├── shared/                 # Cross-runtime JSON and reference data
+├── scripts/                # Seeds, relays, fetch helpers, maintenance
+├── src-tauri/              # Desktop shell and sidecar
+├── tests/                  # Node test runner suites
+├── e2e/                    # Playwright specs
+├── docs/                   # Mintlify docs and internal notes
+└── docs/Docs_To_Review/    # Internal repo-study and future-project planning docs
 ```
 
-## How to Run
+## How To Run
 
 ```bash
-npm install              # Install deps (also runs blog-site postinstall)
-npm run dev              # Start Vite dev server (full variant)
-npm run dev:tech         # Start tech-only variant
-npm run typecheck        # tsc --noEmit (strict mode)
-npm run typecheck:api    # Typecheck API layer separately
-npm run test:data        # Run unit/integration tests
-npm run test:sidecar     # Run sidecar + API handler tests
-npm run test:e2e         # Run all Playwright E2E tests
-make generate            # Regenerate proto stubs (requires buf + sebuf plugins)
+npm install
+npm run dev
+npm run dev:tech
+npm run dev:finance
+npm run dev:commodity
+npm run dev:happy
+npm run typecheck
+npm run typecheck:api
+npm run test:data
+npm run test:sidecar
+make generate
+```
+
+Current local browser URL:
+
+```text
+http://localhost:3000
 ```
 
 ## Architecture Rules
 
-### Dependency Direction
+### Dependency direction
 
-```
+```text
 types -> config -> services -> components -> app -> App.ts
 ```
 
-- `types/` has zero internal imports
-- `config/` imports only from `types/`
-- `services/` imports from `types/` and `config/`
-- `components/` imports from all above
-- `app/` orchestrates components and services
+- `types/` should not depend on internal runtime layers
+- `config/` should stay close to `types/`
+- `services/` should hold business logic and persistence
+- `components/` should not become the source of truth for data
+- `app/` orchestrates the runtime
 
-### API Layer Constraints
+### Edge/API constraints
 
-- `api/*.js` are Vercel Edge Functions: **self-contained JS only**
-- They CANNOT import from `../src/` or `../server/` (different runtime)
-- Only same-directory `_*.js` helpers and npm packages
-- Enforced by `tests/edge-functions.test.mjs` and pre-push hook esbuild check
+- legacy `api/*.js` files are self-contained edge functions
+- they must not import from `../src/` or `../server/`
+- use same-directory helpers and packages only
+- these boundaries are guarded by tests and bundle checks
 
-### Server Layer
+### Server layer
 
-- `server/` code is bundled INTO Edge Functions at deploy time via gateway
-- `server/_shared/` contains Redis client, rate limiting, LLM helpers
-- `server/worldmonitor/<domain>/` has RPC handlers matching proto services
-- All handlers use `cachedFetchJson()` for Redis caching with stampede protection
+- `server/` is the typed handler layer bundled into edge/server entry points
+- shared caching, headers, rate limiting, and LLM helpers live under
+  `server/_shared/`
+- handler code should use cache helpers and include request-varying params in
+  cache keys
 
-### Proto Contract Flow
+### Proto flow
 
+```text
+proto -> codegen -> src/generated -> server handlers -> API wiring
 ```
-proto/ definitions -> buf generate -> src/generated/{client,server}/ -> handlers wire up
+
+- regenerate after proto changes
+- do not hand-edit generated files
+- keep request parsing and cache keys explicit
+
+## Variant Reality
+
+The repo still ships multiple variants:
+
+- `full`
+- `tech`
+- `finance`
+- `commodity`
+- `happy`
+
+Important practical note:
+
+- `src/config/panels.ts` is still the effective source of truth for active panel
+  defaults and runtime exports
+- `src/config/variants/` exists, but future contributors should verify whether a
+  change belongs there before assuming it is active
+
+## Companion Reality
+
+The personal companion now exists inside the current shell. The main panels are:
+
+- `Companion Home`
+- `Companion Inbox`
+- `Companion Ask`
+- `Companion Threads`
+
+The companion is local-first and currently supports:
+
+- workspaces
+- follows
+- inbox triage
+- brief runs
+- ask history
+- notes
+- actions
+- threads
+- automation rules and history
+- export/import
+- optional sync diagnostics and provider flows
+
+Useful internal docs:
+
+- `docs/Docs_To_Review/repo-study/how-to-use-personal-companion.md`
+- `docs/Docs_To_Review/personal-information-companion-plan.md`
+- `docs/Docs_To_Review/next-big-update-plan.md`
+
+## Local Services And Keys
+
+### `.env.local`
+
+Use `.env.local` for local development values.
+
+Current useful local entries in this checkout:
+
+- `OLLAMA_API_URL`
+- `OLLAMA_MODEL`
+- `EIA_API_KEY`
+- `FINNHUB_API_KEY`
+
+### `keys.txt`
+
+`keys.txt` is not read directly by the app. Treat it as a manual reference
+store, not a runtime source.
+
+### Telegram
+
+Telegram bot credentials are not the same thing as the repo's current Telegram
+intel ingestion credentials. The relay path expects MTProto-style values such
+as:
+
+- `TELEGRAM_API_ID`
+- `TELEGRAM_API_HASH`
+- `TELEGRAM_SESSION`
+
+### Ollama
+
+Local Ollama is intended for local AI summarization and companion flows. It is
+not involved in TV or webcam playback.
+
+Health check:
+
+```bash
+curl http://127.0.0.1:11434/api/tags
 ```
 
-- GET fields need `(sebuf.http.query)` annotation
-- `repeated string` fields need `parseStringArray()` in handler
-- `int64` maps to `string` in TypeScript
-- CI checks proto freshness via `.github/workflows/proto-check.yml`
+## Practical Source Guidance
 
-## Variant System
+Do not assume "listed in `docs/data-sources.mdx`" means "working in this local
+checkout right now."
 
-The app ships multiple variants with different panel/layer configurations:
+When evaluating a source, check:
 
-- `full` (default): All features
-- `tech`: Technology-focused subset
-- `finance`: Financial markets focus
-- `commodity`: Commodity markets focus
-- `happy`: Positive news only
+1. is it public or keyed
+2. does it need a relay or seed loop
+3. is the key actually configured here
+4. does the current runtime path use browser, edge, sidecar, or relay access
 
-Variant is set via `VITE_VARIANT` env var. Config lives in `src/config/variants/`.
+Helpful internal references:
 
-## Key Patterns
-
-### Adding a New API Endpoint
-
-1. Define proto message in `proto/worldmonitor/<domain>/`
-2. Add RPC with `(sebuf.http.config)` annotation
-3. Run `make generate`
-4. Create handler in `server/worldmonitor/<domain>/`
-5. Wire handler in domain's `handler.ts`
-6. Use `cachedFetchJson()` for caching, include request params in cache key
-
-### Adding a New Panel
-
-1. Create `src/components/MyPanel.ts` extending `Panel`
-2. Register in `src/config/panels.ts`
-3. Add to variant configs in `src/config/variants/`
-4. Wire data loading in `src/app/data-loader.ts`
-
-### Circuit Breakers
-
-- `src/utils/circuit-breaker.ts` for client-side
-- Used in data loaders to prevent cascade failures
-- Separate breaker per data domain
-
-### Caching
-
-- Redis (Upstash) via `server/_shared/redis.ts`
-- `cachedFetchJson()` coalesces concurrent cache misses
-- Cache tiers: fast (5m), medium (10m), slow (30m), static (2h), daily (24h)
-- Cache key MUST include request-varying params
-
-## Testing
-
-- **Unit/Integration**: `tests/*.test.{mjs,mts}` using `node:test` runner
-- **Sidecar tests**: `api/*.test.mjs`, `src-tauri/sidecar/*.test.mjs`
-- **E2E**: `e2e/*.spec.ts` using Playwright
-- **Visual regression**: Golden screenshot comparison per variant
-
-## CI Checks (GitHub Actions)
-
-| Workflow | Trigger | What it checks |
-|---|---|---|
-| `typecheck.yml` | PR + push to main | `tsc --noEmit` for src and API |
-| `lint.yml` | PR (markdown changes) | markdownlint-cli2 |
-| `proto-check.yml` | PR (proto changes) | Generated code freshness |
-| `build-desktop.yml` | Manual | Tauri desktop build |
-| `test-linux-app.yml` | Manual | Linux AppImage smoke test |
-
-## Pre-Push Hook
-
-Runs automatically before `git push`:
-
-1. TypeScript check (src + API)
-2. CJS syntax validation
-3. Edge function esbuild bundle check
-4. Edge function import guardrail test
-5. Markdown lint
-6. MDX lint (Mintlify compatibility)
-7. Version sync check
-
-## Deployment
-
-- **Web**: Vercel (auto-deploy on push to main)
-- **Relay/Seeds**: Railway (Docker, cron services)
-- **Desktop**: Tauri builds via GitHub Actions
-- **Docs**: Mintlify (proxied through Vercel at `/docs`)
+- `docs/data-sources.mdx`
+- `docs/Docs_To_Review/repo-study/data-source-availability-audit.md`
+- `docs/Docs_To_Review/repo-study/gui-source-map.md`
 
 ## Critical Conventions
 
-- `fetch.bind(globalThis)` is BANNED. Use `(...args) => globalThis.fetch(...args)` instead
-- Edge Functions cannot use `node:http`, `node:https`, `node:zlib`
-- Always include `User-Agent` header in server-side fetch calls
-- Yahoo Finance requests must be staggered (150ms delays)
-- New data sources MUST have bootstrap hydration wired in `api/bootstrap.js`
-- Redis seed scripts MUST write `seed-meta:<key>` for health monitoring
+- do not use `fetch.bind(globalThis)`; use `(...args) => globalThis.fetch(...args)`
+- include `User-Agent` in server-side fetches where the upstream expects it
+- cache keys must include request-varying params
+- new data sources should be wired into bootstrap/hydration if they are part of
+  the primary runtime experience
+- generated code is not hand-edited
+- treat desktop and relay code as separate trust/runtime boundaries
 
-## External References
+## Testing
 
-- [Architecture (system reference)](ARCHITECTURE.md)
-- [Design Philosophy (why decisions were made)](docs/architecture.mdx)
-- [Contributing guide](CONTRIBUTING.md)
-- [Data sources catalog](docs/data-sources.mdx)
-- [Health endpoints](docs/health-endpoints.mdx)
-- [Adding endpoints guide](docs/adding-endpoints.mdx)
-- [API reference (OpenAPI)](docs/api/)
+Main commands:
+
+```bash
+npm run typecheck
+npm run typecheck:api
+npm run test:data
+npm run test:sidecar
+npm run test:e2e
+```
+
+For docs work:
+
+```bash
+npx markdownlint-cli2 'docs/Docs_To_Review/**/*.md' 'runbook.md' 'AGENTS.md'
+```
+
+## Internal Docs Worth Reading First
+
+Read these before making large decisions:
+
+- `runbook.md`
+- `ARCHITECTURE.md`
+- `docs/Docs_To_Review/repo-study/README.md`
+- `docs/Docs_To_Review/repo-study/frontend-runtime.md`
+- `docs/Docs_To_Review/repo-study/api-data-pipeline.md`
+- `docs/Docs_To_Review/repo-study/desktop-security.md`
+- `docs/Docs_To_Review/repo-study/quality-and-drift.md`
+
+If the repo docs and the code disagree, trust the code and update the docs.

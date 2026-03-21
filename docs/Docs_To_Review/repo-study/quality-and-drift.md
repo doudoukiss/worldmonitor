@@ -63,8 +63,8 @@ Examples of likely stale statements:
 - says about 50 panels, but `src/components/` now has 87 top-level files and 57
   direct `Panel` subclasses
 - says 17 domain services, but the repo currently has 25 `service.proto` files
-- says the dev server runs on `http://localhost:3000`, while the main Vite app
-  defaults to port 5173
+- older docs disagree about whether the dev server should be `3000` or `5173`;
+  this checkout is currently running on `http://localhost:3000`
 
 ### Variant config has two stories
 
@@ -83,6 +83,23 @@ does include Preact and there is at least one direct Preact component file.
 The top-level docs are still directionally useful, but counts such as number of
 variants, languages, panels, or services should be verified from code before
 reusing them in new docs.
+
+### Local-runtime docs can drift even when the code is fine
+
+During follow-up work on 2026-03-21, the local setup changed in ways that some
+internal notes had not yet caught up with:
+
+- `.env.local` was added and is now part of the normal local workflow in this
+  checkout
+- local Ollama is configured
+- `EIA_API_KEY` and `FINNHUB_API_KEY` are configured locally
+- `keys.txt` still exists, but remains reference-only rather than a runtime
+  source
+
+This is a reminder that contributor docs should distinguish between:
+
+- repo capability in theory
+- the current checked-out local environment
 
 ## Suggested Follow-Up Maintenance
 

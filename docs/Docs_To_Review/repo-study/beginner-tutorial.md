@@ -6,6 +6,12 @@ lost."
 
 It is intentionally practical. It does not try to explain every subsystem.
 
+Snapshot note for this checkout on 2026-03-21:
+
+- the local dev server currently comes up on `http://localhost:3000`
+- `.env.local` is present in this checkout
+- local Ollama, Finnhub, and EIA are configured for local use
+
 ## 1. What You Are Looking At
 
 WorldMonitor is not just one frontend app.
@@ -38,11 +44,17 @@ npm install
 npm run dev
 ```
 
-The main app uses Vite, so the default local URL is usually:
+In this checkout, the main app is currently coming up at:
 
 ```text
-http://localhost:5173
+http://localhost:3000
 ```
+
+Important practical note:
+
+- older docs and some Vite expectations may still mention port `5173`
+- trust the actual printed local URL from `npm run dev`
+- this repo has some docs drift around dev-port assumptions
 
 Other variants:
 
@@ -52,6 +64,9 @@ npm run dev:finance
 npm run dev:happy
 npm run dev:commodity
 ```
+
+If you want to use the configured local market and AI features in this checkout,
+make sure `.env.local` remains present before starting the app.
 
 ## 3. Learn The Main Runtime Path
 
@@ -258,6 +273,11 @@ used by the app currently come from `src/config/panels.ts`.
 It is not. Most UI behavior is class-based and imperative.
 
 ### Changing generated artifacts by hand
+
+Do not treat `keys.txt` as runtime config.
+
+The app does not read it directly. Local runtime values belong in `.env.local`
+or the relevant desktop/runtime config path.
 
 If the change starts in `proto/`, regenerate the outputs.
 

@@ -1,11 +1,22 @@
 # WorldMonitor Repo Study
 
-Snapshot taken on 2026-03-20 from the local checkout at
+Snapshot updated on 2026-03-21 from the local checkout at
 `/Users/sonics/project/worldmonitor`.
 
 This folder is an internal study pack, not a source-of-truth spec. It records
 what the repo appears to do today based on reading the active entry points,
 runtime glue, build config, and guardrail tests.
+
+Current local-status deltas since the initial pack:
+
+- the main local dev server in this checkout is running on
+  `http://localhost:3000`
+- `.env.local` now exists for this checkout
+- local Ollama is configured and intended to use `qwen2.5:7b`
+- `EIA_API_KEY` and `FINNHUB_API_KEY` are now wired for local use
+- `keys.txt` remains reference-only and is not read directly by the app
+- the companion docs in this folder now reflect the current local-first
+  companion state rather than the earlier pre-configured snapshot
 
 ## Scope
 
@@ -56,3 +67,4 @@ runtime glue, build config, and guardrail tests.
 - `quality-and-drift.md`
 - `data-source-availability-audit.md`
 - `gui-source-map.md`
+- `how-to-use-personal-companion.md`

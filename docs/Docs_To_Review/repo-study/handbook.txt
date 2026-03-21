@@ -1,0 +1,84 @@
+Yes. If you close a panel like TV or webcams, the reliable way to bring it back is through the panel toggles in the settings UI. The close
+  button only sets that panel’s enabled flag to false in saved panel settings, and the settings modal can turn it back on again in src/app/event-
+  handlers.ts:340 and src/components/UnifiedSettings.ts:333. There is also a quick undo for the most recently closed panel with Cmd+Z / Ctrl+Z in
+  src/app/event-handlers.ts:128 and src/app/event-handlers.ts:400.
+
+  For TV and webcams specifically: they are among the heavier local consumers, because the actual video playback and decode happen in your
+  browser on your Mac. The good news is that closing those panels really does stop the video side. The webcam panel destroys its iframes when
+  hidden or closed in src/components/LiveWebcamsPanel.ts:578 and src/components/LiveWebcamsPanel.ts:684. The TV panel destroys the player and
+  pauses native video in src/components/LiveNewsPanel.ts:655 and src/components/LiveNewsPanel.ts:1616. So if you do not need video, disabling
+  those panels is a sensible bandwidth and CPU reduction. There is also a built-in media setting for lower stream quality and for turning off
+  “keep live streams running” in src/services/preferences-content.ts:205 and src/services/live-stream-settings.ts:23. That said, closing the
+  panels does not stop unrelated news/API/background polling elsewhere in the app; it stops the video playback path.
+
+  For the personal companion, the easiest way to use it in practice is:
+
+  - Companion Home: create or pick a workspace, add a few follows, and generate briefs.
+  - Companion Inbox: review incoming items, save or dismiss them.
+  - Companion Ask: ask scoped questions like “What changed in energy this week?” or “Why does this matter for my portfolio?”
+  - Companion Threads: keep durable topics that tie together notes, actions, asks, and briefs.
+
+  The current UX is visible directly in src/components/CompanionHomePanel.ts:301, src/components/CompanionAskPanel.ts:110, src/components/
+  CompanionInboxPanel.ts:76, and src/components/CompanionThreadsPanel.ts:126. In plain terms, think of a workspace as “my current context,”
+  follows as “things I care about,” the inbox as “new signals,” briefs as “summaries,” and notes/actions as “what I want to keep or do.”
+
+  Ollama is not actually being used right now on this machine. I checked the local default endpoint and it is down:
+  http://127.0.0.1:11434/api/tags did not respond. I also checked Homebrew services, and brew services list shows ollama with status none, so it
+  is not currently running as a brew-managed service. In code, Ollama only participates if OLLAMA_API_URL and OLLAMA_MODEL are configured in the
+  runtime config in src/services/runtime-config.ts:120, and the LLM chain itself is in server/_shared/llm.ts:124. So the answer is: supported, b
+  ut not active in your current local run.
+
+  If you want, I can do two practical follow-ups next:
+
+  1. disable the TV/webcam panels by default for your local setup
+  2. write a short “how to use the personal companion” markdown guide for your exact workflow
+
+The ollama serve process is running now, so Homebrew did start it. I can see the process at /opt/homebrew/opt/ollama/bin/ollama serve.
+
+  But the app still cannot use it yet, because the local API endpoint is not responding right now. A direct check to
+  http://127.0.0.1:11434/api/tags still failed, so from the app’s point of view Ollama is not reachable yet.
+
+  So the current state is:
+
+  - brew services did launch Ollama
+  - the server process exists
+  - but the API is not answering on 127.0.0.1:11434 yet
+  - so WorldMonitor is still not using Ollama at this moment
+
+  Once it is reachable, the app can use it if OLLAMA_API_URL and OLLAMA_MODEL are configured, as wired in src/services/runtime-config.ts:120 and
+  server/_shared/llm.ts:24.
+
+  The next practical check on your machine is:
+
+  ollama list
+  curl http://127.0.0.1:11434/api/tags
+
+  If those work, I can set up the app to point at it next.
+
+
+  What that means:
+
+  - the local API is reachable at http://127.0.0.1:11434
+  - the app can use Ollama once OLLAMA_API_URL and OLLAMA_MODEL are set
+  - your best general-purpose summarization choice from the installed models is qwen2.5:7b
+
+  Recommended config:
+
+  - OLLAMA_API_URL=http://127.0.0.1:11434
+  - OLLAMA_MODEL=qwen2.5:7b
+
+  I would not use:
+
+  - embeddinggemma:latest for summaries, because it is an embedding model
+  - llama3.2:1b unless you want a much lighter but weaker fallback
+
+  One important detail: in this project, Ollama is used for AI summarization and related LLM flows, not for the TV/video side. The LLM provider
+  chain is wired in server/_shared/llm.ts, and the browser/client capability gate is in src/services/runtime-config.ts.
+
+  If you want, I can do the next step and wire your local setup to use:
+
+  - http://127.0.0.1:11434
+  - qwen2.5:7b
+
+  That would mean creating a local env/config path for this repo so the app starts using Ollama automatically.
+

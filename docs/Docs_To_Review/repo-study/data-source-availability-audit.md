@@ -1,6 +1,6 @@
 # Data Source Availability Audit
 
-Snapshot taken on 2026-03-20 from the local checkout at
+Snapshot updated on 2026-03-21 from the local checkout at
 `/Users/sonics/project/worldmonitor`.
 
 This note answers two practical questions:
@@ -10,35 +10,50 @@ This note answers two practical questions:
 
 ## Bottom Line
 
-- In the current shell, none of the commonly used source credentials were set.
-- That means anything guarded by runtime secrets is currently unavailable unless
-  you add credentials and, in some cases, run extra infrastructure such as the
-  relay or seed loops.
-- The personal companion refactor plan is native Mac first, not Docker first.
+- This checkout is no longer in the "no keys configured" state.
+- `FINNHUB_API_KEY`, `EIA_API_KEY`, `OLLAMA_API_URL`, and `OLLAMA_MODEL` are
+  now configured locally through `.env.local`.
+- That improves the local market and AI-summary path, but it does not suddenly
+  make the full source catalog available. Many sources still depend on extra
+  credentials, relay jobs, seed loops, or premium access.
+- The personal companion direction remains native Mac first, not Docker first.
   Docker remains optional for the existing full-stack self-hosted monitor.
 
 ## Current Environment Result
 
-Checked on 2026-03-20:
+Checked on 2026-03-21:
 
-- Missing: `FINNHUB_API_KEY`, `FRED_API_KEY`, `EIA_API_KEY`,
+- Present locally via `.env.local`: `FINNHUB_API_KEY`, `EIA_API_KEY`,
+  `OLLAMA_API_URL`, `OLLAMA_MODEL`
+- Still not configured in this checkout: `FRED_API_KEY`,
   `CLOUDFLARE_API_TOKEN`, `ACLED_ACCESS_TOKEN`, `UCDP_ACCESS_TOKEN`,
   `NASA_FIRMS_API_KEY`, `AISSTREAM_API_KEY`, `OPENSKY_CLIENT_ID`,
   `OPENSKY_CLIENT_SECRET`, `WINGBITS_API_KEY`, `WS_RELAY_URL`,
   `AVIATIONSTACK_API`, `ICAO_API_KEY`, `TRAVELPAYOUTS_API_TOKEN`,
   `OTX_API_KEY`, `ABUSEIPDB_API_KEY`, `URLHAUS_AUTH_KEY`, `WTO_API_KEY`,
-  `WINDY_API_KEY`, and the LLM-related keys.
+  `WINDY_API_KEY`, and the relay-style Telegram credentials
+  `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_SESSION`
+
+Also important:
+
+- `keys.txt` contains a Telegram bot token and chat ID, but this repo does not
+  read `keys.txt` directly
+- the current Telegram intel path does not use bot-token credentials anyway; it
+  expects MTProto relay credentials instead
 
 Practical consequence:
 
-- Secret-gated runtime features are off by default in this checkout.
-- Public and non-secret source paths are the only source class that can be used
-  without adding more configuration.
+- Finnhub-backed market paths and EIA-backed energy paths are now more likely to
+  work locally than they were in the earlier audit
+- local Ollama-backed summary flows are now also configured
+- secret-gated runtime features outside that set are still off by default
+- public and non-secret source paths remain the safest base layer
 
 Repo references:
 
 - [`.env.example`](/Users/sonics/project/worldmonitor/.env.example#L5)
 - [`src/services/runtime-config.ts`](/Users/sonics/project/worldmonitor/src/services/runtime-config.ts#L120)
+- [`scripts/ais-relay.cjs`](/Users/sonics/project/worldmonitor/scripts/ais-relay.cjs#L358)
 
 ## Runtime Direction
 
@@ -103,8 +118,8 @@ still apply.
 
 | Source | Repo use | Free signal | Notes |
 | --- | --- | --- | --- |
-| Finnhub | Primary stock quotes | Repo docs say free registration | Good low-cost market add-on for a personal companion. |
-| EIA Open Data | Oil analytics | EIA says its open data is free and available via API | Repo still expects an API key. |
+| Finnhub | Primary stock quotes | Repo docs say free registration | Already configured in this checkout. |
+| EIA Open Data | Oil analytics | EIA says its open data is free and available via API | Already configured in this checkout. |
 | FRED | Macro indicators | Official API docs require user account + API key | Straightforward free signup. |
 | NASA FIRMS | Fire detection | Official FIRMS docs say to sign up for a free `MAP_KEY` by email | Rate-limited but usable. |
 | AISStream | Vessel tracking | Official docs show user-generated API keys; official site advertises a free WebSocket API | Browser-direct use is not supported, so keep it behind a relay. |
@@ -112,7 +127,7 @@ still apply.
 | Windy Webcams | Webcam layer | Official pricing page has a Free plan and "Get API key" flow | Repo docs already describe a free tier. |
 | CoinGecko Demo API | Crypto markets | Official docs expose a public/demo API key flow | The repo can also use CoinGecko without a key and fall back to CoinPaprika. |
 | ACLED | Conflict and protest data | Repo docs say free for researchers | Eligibility and terms matter; do not assume broad commercial free use. |
-| Telegram app credentials | Telegram OSINT relay | Official Telegram app registration is free | Useful only if you keep the MTProto relay path. |
+| Telegram app credentials | Telegram OSINT relay | Official Telegram app registration is free | Useful only if you keep the MTProto relay path. Bot token credentials are a different product. |
 
 Repo references:
 
@@ -219,3 +234,13 @@ The cautious "do not assume free without checking current terms first" list is:
 - OTX
 - URLhaus auth-based paths
 - CorridorRisk
+
+## Current Local Answer
+
+The most accurate answer for this checkout today is:
+
+- usable and configured now: Finnhub, EIA, local Ollama, public/no-key sources
+- not automatically usable just because they appear in `keys.txt`: Telegram bot
+  delivery does not enable Telegram intel ingestion
+- still likely unavailable without more setup: FRED, ACLED, UCDP, AIS/OpenSky,
+  Windy webcam API, WTO, and most relay- or seed-dependent keyed integrations
